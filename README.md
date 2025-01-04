@@ -2,5 +2,5 @@
 
 updating amd's implementation of the plugin
 
-
+d12 backend crashes rn and frame gen doesnt work yet
 
