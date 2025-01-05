@@ -802,22 +802,19 @@ public:
 	{
 		//ERHIPipeline Pipeline = RHICmdList.GetPipeline();
 		//SCOPED_GPU_MASK(RHICmdList, FRHIGPUMask::All());
-		RHICmdList.SwitchPipeline(ERHIPipeline::Graphics);
-		if (!Tex)
-		{
-			UE_LOG(LogRHI, Warning, TEXT("Flush called with null texture."));
-			return;
-		}
+		//RHICmdList.SwitchPipeline(ERHIPipeline::Graphics);
+		//RHICmdList.SubmitCommandsAndFlushGPU();
+		
 		
 #if UE_VERSION_OLDER_THAN(5, 1, 0)
 		RHICmdList.SubmitCommandsHint();
 #else
-		RHICmdList.EnqueueLambda([this, Tex, &RHICmdList](FRHICommandListImmediate& cmd)
+		RHICmdList.EnqueueLambda([this, Tex](FRHICommandListImmediate& cmd)
 		{
 			
 			ID3D12DynamicRHI* DynamicRHI = GetID3D12DynamicRHI();
 			uint32 const DeviceIndex = DynamicRHI->RHIGetResourceDeviceIndex(Tex);
-			DynamicRHI->RHIFinishExternalComputeWork(RHICmdList, DeviceIndex, (ID3D12GraphicsCommandList*)GetNativeCommandBuffer(cmd, Tex));
+			DynamicRHI->RHIFinishExternalComputeWork(cmd, DeviceIndex, (ID3D12GraphicsCommandList*)GetNativeCommandBuffer(cmd, Tex));
 		});
 #endif
 	}
