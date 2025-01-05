@@ -7,7 +7,7 @@ As of right now Frame Gen is not working.
 
 To install the plugin:
 1. Extract the zip file.
-2. Place the FSR3 folder within your Unreal Engine source tree at: Engine/Plugins/Marketplace 
+2. Place the FSR3 folder within your Unreal Engine source tree at: Engine/Plugins/Marketplace or in your project's plugins folder 
 3. Open UnrealEditor.
 4. Go to the Plugins window & enable FSR3
 5. Restart.
