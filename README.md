@@ -1,5 +1,9 @@
-# FidelityFX Super Resolution 3 (Updated for UE5.5.1 {WIP})
+# FidelityFX Super Resolution 3 (Deprecated)
 The AMD FidelityFX Super Resolution 3 (FSR3) plugin for Unreal Engine 5.5.1.
+
+Latest release: https://gpuopen.com/learn/ue-fsr3/
+
+
 
 As of right now Frame Gen is not working.-Voyager
 
