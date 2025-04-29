@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -21,7 +21,11 @@
 
 #include "/Engine/Private/Common.ush"
 #include "/Engine/Private/ScreenPass.ush"
+#if UNREAL_ENGINE_MAJOR_VERSION >= 5
 #include "/Engine/Private/TemporalSuperResolution/TSRCommon.ush"
+#else
+#include "/Engine/Private/TemporalAA/TAACommon.ush"
+#endif
 
 
 // =====================================================================================
@@ -33,23 +37,23 @@ Texture2D InputDepth;
 Texture2D InputVelocity;
 RWTexture2D<float2> OutputTexture;
 
+#if UNREAL_ENGINE_MAJOR_VERSION == 5 && UNREAL_ENGINE_MINOR_VERSION >= 5
+float2 ComputeStaticVelocity(float2 ScreenPos, float DeviceZ)
+{
+	float3 PosN = float3(ScreenPos, DeviceZ);
+	float4 ThisClip = float4(ScreenPos, DeviceZ, 1);
+	float4 PrevClip = mul(ThisClip, View.ClipToPrevClip); 
+	float2 PrevScreen = PrevClip.xy / PrevClip.w;
+	return PosN.xy - PrevScreen;
+}
+#endif
+
 // =====================================================================================
 //
 // ENTRY POINTS
 //
 // =====================================================================================
-
-float2 ComputeStaticVelocity(float2 ScreenPos, float DeviceZ)
-{
-    float3 PosN = float3(ScreenPos, DeviceZ);
-
-    float4 ThisClip = float4(PosN, 1);
-    float4 PrevClip = mul(ThisClip, View.ClipToPrevClip);
-    float2 PrevScreen = PrevClip.xy / PrevClip.w;
-    return AdjustClipToPrevClipForProjectionType(PosN.xy - PrevScreen, DeviceZ);
-}
-
-[numthreads(THREADGROUP_SIZEX, THREADGROUP_SIZEY, THREADGROUP_SIZEZ)]
+[numthreads(THREADGROUP_SIZEX, THREADGROUP_SIZEY, THREADGROUP_SIZEZ)] 
 void MainCS(uint3 LocalThreadId : SV_GroupThreadID, uint3 WorkGroupId : SV_GroupID, uint3 DispatchThreadId : SV_DispatchThreadID)
 {
 	uint Width = View.ViewSizeAndInvSize.x;
@@ -77,5 +81,3 @@ void MainCS(uint3 LocalThreadId : SV_GroupThreadID, uint3 WorkGroupId : SV_Group
 		OutputTexture[DispatchThreadId.xy] = Velocity * float2(-0.5, 0.5);
 	}
 }
-
-

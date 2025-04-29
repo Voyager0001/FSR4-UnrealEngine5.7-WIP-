@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include <iostream>
 #include "CoreMinimal.h"
 #include "Rendering/SlateRenderer.h"
 #include "Rendering/SlateDrawBuffer.h"
@@ -29,12 +28,10 @@
 #include "Widgets/Accessibility/SlateAccessibleMessageHandler.h"
 #include "Framework/Application/SlateApplication.h"
 #include "FFXShared.h"
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+#include "PixelFormat.h"
+#endif
 
-class FRDGBuilder;
-class FRDGTexture;
-
-template<int N>
-struct GetSize;
 //------------------------------------------------------------------------------------------------------
 // Slate override code that allows Frame Interpolation to re-render and present both the Interpolated and Real frame.
 //------------------------------------------------------------------------------------------------------
@@ -50,10 +47,11 @@ public:
 
 	void OnPostResizeWindowBackBufferThunk(void* Ptr) { return PostResizeBackBufferDelegate.Broadcast(Ptr); }
 
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 	void OnBackBufferReadyToPresentThunk(SWindow& Window, const FTextureRHIRef& Texture) { return OnBackBufferReadyToPresentDelegate.Broadcast(Window, Texture); }
-
-	//void OnAddBackBufferReadyToPresentPassThunk(FRDGBuilder& FRDGBuilder, SWindow& Window, FRDGTexture* FRDGTexture) { return OnAddBackBufferReadyToPresentPassDelegate.Broadcast(FRDGBuilder, Window, FRDGTexture); } //come back to this
-
+#else
+	void OnBackBufferReadyToPresentThunk(SWindow& Window, const FTexture2DRHIRef& Texture) { return OnBackBufferReadyToPresentDelegate.Broadcast(Window, Texture); }
+#endif
 
 	FFXFrameInterpolationSlateRenderer(TSharedRef<FSlateRenderer> InUnderlyingRenderer);
 	virtual ~FFXFrameInterpolationSlateRenderer();
@@ -84,7 +82,7 @@ public:
 
 #if UE_VERSION_AT_LEAST(5, 1, 0)
 	virtual FSlateResourceHandle GetResourceHandle(const FSlateBrush& Brush, FVector2f LocalSize, float DrawScale);
-#else
+#elif UE_VERSION_AT_LEAST(5, 0, 0)
 	virtual FSlateResourceHandle GetResourceHandle(const FSlateBrush& Brush, FVector2D LocalSize, float DrawScale);
 #endif
 
@@ -122,11 +120,15 @@ public:
 
 	virtual void PrepareToTakeScreenshot(const FIntRect& Rect, TArray<FColor>* OutColorData, SWindow* InScreenshotWindow);
 
+#if UE_VERSION_OLDER_THAN(5, 5, 0)
 	virtual void SetWindowRenderTarget(const SWindow& Window, class IViewportRenderTargetProvider* Provider);
+#endif
 
 	virtual FSlateUpdatableTexture* CreateUpdatableTexture(uint32 Width, uint32 Height);
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 	virtual FSlateUpdatableTexture* CreateSharedHandleTexture(void* SharedHandle);
+#endif
 
 	virtual void ReleaseUpdatableTexture(FSlateUpdatableTexture* Texture);
 
@@ -145,8 +147,6 @@ public:
 
 	virtual int32 GetCurrentSceneIndex() const;
 
-	virtual void SetCurrentSceneIndex(int32 InIndex);
-
 	virtual void ClearScenes();
 
 	virtual void DestroyCachedFastPathRenderingData(struct FSlateCachedFastPathRenderingData* VertexData);
@@ -157,6 +157,11 @@ public:
 	virtual void AddWidgetRendererUpdate(const struct FRenderThreadUpdateContext& Context, bool bDeferredRenderTargetUpdate);
 
 	virtual EPixelFormat GetSlateRecommendedColorFormat();
+
+#if UE_VERSION_AT_LEAST(5, 5, 0)
+	void SetCurrentSceneIndex(int32 index) override;
+#endif
+
 private:
 	FSlateDrawBuffer DrawBuffers[NumDrawBuffers];
 	TArray<TSharedPtr<FSlateDynamicImageBrush>> DynamicBrushesToRemove[NumDrawBuffers];
@@ -168,7 +173,7 @@ private:
 //------------------------------------------------------------------------------------------------------
 // Accessor for the Slate application so that we can swizzle the renderer.
 //------------------------------------------------------------------------------------------------------
-#if UE_VERSION_AT_LEAST(5, 0, 0) && UE_VERSION_OLDER_THAN(5, 6, 0)
+#if UE_VERSION_AT_LEAST(4, 26, 0) && UE_VERSION_OLDER_THAN(5, 6, 0)
 class FFXFISlateApplicationAccessor
 {
 public:
@@ -190,7 +195,9 @@ public:
 public:
 	const static uint32 CursorPointerIndex;
 	const static uint32 CursorUserIndex;
+#if UE_VERSION_AT_LEAST(4, 27, 0)
 	const static FPlatformUserId SlateAppPrimaryPlatformUser;
+#endif
 	TSharedPtr<FSlateRenderer> Renderer;
 	FHitTesting HitTesting;
 	static TSharedPtr<FSlateApplicationBase> CurrentBaseApplication;
@@ -207,9 +214,12 @@ public:
 	FOnGlobalInvalidationToggled OnGlobalInvalidationToggledEvent;
 	FCriticalSection ActiveTimerCS;
 	bool bIsSlateAsleep;
+#if UE_VERSION_AT_LEAST(4, 27, 0)
 	ECustomSafeZoneState CustomSafeZoneState;
+#endif
+#if UE_VERSION_AT_LEAST(4, 27, 0) || WITH_EDITORONLY_DATA
 	FMargin CustomSafeZoneRatio;
-	bool bAnyActiveTimersPending = false;
+#endif
 };
 static_assert(sizeof(FSlateApplicationBase) == sizeof(FFXFISlateApplicationAccessor), "FFXFISlateApplicationAccessor must match the layout of FSlateApplicationBase so we can access the renderer!");
 
@@ -218,11 +228,10 @@ class FFXFISlateApplication
 	, public FGenericApplicationMessageHandler
 {
 public:
+	DECLARE_MULTICAST_DELEGATE_FiveParams(FOnFocusChanging, const FFocusEvent&, const FWeakWidgetPath&, const TSharedPtr<SWidget>&, const FWidgetPath&, const TSharedPtr<SWidget>&);
 #if WITH_EDITORONLY_DATA
 	FDragDropCheckingOverride OnDragDropCheckOverride;
 #endif
-	
-
 	TSet<FKey> PressedMouseButtons;
 	bool bAppIsActive;
 	bool bSlateWindowActive;
@@ -248,7 +257,7 @@ public:
 	FThrottleRequest UserInteractionResponsivnessThrottle;
 	double LastUserInteractionTime;
 	double LastUserInteractionTimeForThrottling;
-	DECLARE_EVENT_OneParam(FFXFISlateApplication, FSlateLastUserInteractionTimeUpdateEvent, double); //
+	DECLARE_EVENT_OneParam(FFXFISlateApplication, FSlateLastUserInteractionTimeUpdateEvent, double);
 	FSlateLastUserInteractionTimeUpdateEvent LastUserInteractionTimeUpdateEvent;
 	double LastMouseMoveTime;
 	FPopupSupport PopupSupport;
@@ -287,7 +296,9 @@ public:
 	bool bIsFakingTouch;
 	bool bIsGameFakingTouch;
 	bool bIsFakingTouched;
-	bool bAllowFakingTouch; //new
+#if UE_VERSION_AT_LEAST(5, 4, 0)
+	bool bAllowFakingTouch;
+#endif
 	bool bHandleDeviceInputWhenApplicationNotActive;
 	FOnKeyEvent UnhandledKeyDownEventHandler;
 	FOnKeyEvent UnhandledKeyUpEventHandler;
@@ -311,13 +322,11 @@ public:
 	FUserRegisteredEvent UserRegisteredEvent;
 	DECLARE_EVENT_OneParam(FFXFISlateApplication, FOnWindowBeingDestroyed, const SWindow&);
 	FOnWindowBeingDestroyed WindowBeingDestroyedEvent;
-	//DECLARE_EVENT_OneParam(FFXFISlateApplication, FOnMenuBeingDestroyed, const IMenu&);
-	//OnMenuBeingDestroyed() MenuBeingDestroyedEvent;
-	//DECLARE_EVENT(FFXFISlateApplication, FOnMenuDestroyed);
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 	FOnMenuDestroyed MenuBeingDestroyedEvent;
+#endif
 	DECLARE_EVENT_OneParam(FFXFISlateApplication, FOnModalLoopTickEvent, float);
 	FOnModalLoopTickEvent ModalLoopTickEvent;
-	DECLARE_MULTICAST_DELEGATE_FiveParams(FOnFocusChanging, const FFocusEvent&, const FWeakWidgetPath&, const TSharedPtr<SWidget>&, const FWidgetPath&, const TSharedPtr<SWidget>&);
 	FOnFocusChanging FocusChangingDelegate;
 	FCriticalSection SlateTickCriticalSection;
 	int32 ProcessingInput;
@@ -325,23 +334,29 @@ public:
 #if UE_VERSION_AT_LEAST(5, 4, 0)
 	bool bIsTicking = false;
 #endif
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 	uint64 PlatformMouseMovementEvents = 0;
+#endif
 	class InputPreProcessorsHelper
 	{
 	public:
-		bool PreProcessInput(ESlateDebuggingInputEvent InputEvent, TFunctionRef<bool(IInputProcessor&)> InputProcessFunc);
-
-		void AddInternal(const FInputPreprocessorRegistration& Registration);
-
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 		using FProcessorTypeStorage = TArray<TSharedPtr<IInputProcessor>>;
 		using FInputProcessorStorage = TSparseArray<FProcessorTypeStorage, TInlineSparseArrayAllocator<(uint32)EInputPreProcessorType::Count>>;
-
-		/** The container of input pre-processors, indexed by type and ordered by priority. */
 		FInputProcessorStorage InputPreProcessors;
 		TArray<TSharedPtr<IInputProcessor>> InputPreProcessorsIteratorList;
+#else
+		TArray<TSharedPtr<IInputProcessor>> InputPreProcessorList;
+#endif
+		
 		bool bIsIteratingPreProcessors = false;
 		TArray<TSharedPtr<IInputProcessor>> ProcessorsPendingRemoval;
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 		TArray<FInputPreprocessorRegistration> ProcessorsPendingAddition;
+#else
+		TMap<TSharedPtr<IInputProcessor>, int32> ProcessorsPendingAddition;
+#endif
+		
 	};
 	InputPreProcessorsHelper InputPreProcessors;
 	TSharedRef<ISlateInputManager> InputManager;
@@ -355,9 +370,6 @@ public:
 	FOnWindowDPIScaleChanged OnWindowDPIScaleChangedEvent;
 #endif // WITH_EDITOR
 };
-
-//GetSize<sizeof(FFXFISlateApplication)> S;
-//GetSize<sizeof(FSlateApplication)> S;
 static_assert(sizeof(FSlateApplication) == sizeof(FFXFISlateApplication), "FFXFISlateApplication must match the layout of FSlateApplication so we can access the time detla!");
 
 #else

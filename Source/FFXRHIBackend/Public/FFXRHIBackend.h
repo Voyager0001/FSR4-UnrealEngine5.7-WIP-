@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -155,6 +155,7 @@ public:
 	bool IsFloat16Supported() final;
 	void ForceUAVTransition(FRHICommandListImmediate& RHICmdList, FRHITexture* OutputTexture, ERHIAccess Access) final;
 	void UpdateSwapChain(ffxContext* Context, ffxConfigureDescFrameGeneration& Desc) final;
+	void UpdateSwapChain(ffxContext* Context, ffxConfigureDescFrameGeneration& Desc, ffxConfigureDescFrameGenerationRegisterDistortionFieldResource& DescDistortion) final;
 	FfxApiResource GetInterpolationOutput(FfxSwapchain SwapChain) final;
 	void* GetInterpolationCommandList(FfxSwapchain SwapChain) final;
 	void RegisterFrameResources(FRHIResource* FIResources, uint64 FrameID) final;

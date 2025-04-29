@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -45,7 +45,19 @@ using FFXFSR3View = FViewInfo;
 #define ENGINE_HAS_DENOISE_INDIRECT 0
 #endif
 
+namespace FFXFSR3Strings
+{
+	static constexpr auto D3D12 = TEXT("D3D12");
+}
+
 struct FPostProcessingInputs;
+
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+//-------------------------------------------------------------------------------------
+// Simplifies cross engine support.
+//-------------------------------------------------------------------------------------
+typedef IScreenSpaceDenoiser::FDiffuseIndirectOutputs FSSDSignalTextures;
+#endif
 
 //-------------------------------------------------------------------------------------
 // The core upscaler implementation for FSR3.
@@ -80,10 +92,21 @@ public:
 
 	class FRDGBuilder* GetGraphBuilder();
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 	IFFXFSR3TemporalUpscaler::FOutputs AddPasses(
 		FRDGBuilder& GraphBuilder,
 		const FFXFSR3View& View,
 		const FFXFSR3PassInput& PassInputs) const override;
+#else		
+	void AddPasses(
+		FRDGBuilder& GraphBuilder,
+		const FFXFSR3View& View,
+		const FFXFSR3PassInput& PassInputs,
+		FRDGTextureRef* OutSceneColorTexture,
+		FIntRect* OutSceneColorViewRect,
+		FRDGTextureRef* OutSceneColorHalfResTexture,
+		FIntRect* OutSceneColorHalfResViewRect) const override;
+#endif
 
 #if UE_VERSION_AT_LEAST(5, 1, 0)
 	IFFXFSR3TemporalUpscaler* Fork_GameThread(const class FSceneViewFamily& InViewFamily) const override;
@@ -190,6 +213,7 @@ public:
 		const FAmbientOcclusionRayTracingConfig Config) const override;
 #endif
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 	FSSDSignalTextures DenoiseDiffuseIndirectHarmonic(
 		FRDGBuilder& GraphBuilder,
 		const FViewInfo& View,
@@ -197,6 +221,15 @@ public:
 		const FSceneTextureParameters& SceneTextures,
 		const FDiffuseIndirectHarmonic& Inputs,
 		const HybridIndirectLighting::FCommonParameters& CommonDiffuseParameters) const override;
+#else
+	FDiffuseIndirectHarmonic DenoiseDiffuseIndirectHarmonic(
+		FRDGBuilder& GraphBuilder,
+		const FViewInfo& View,
+		FPreviousViewInfo* PreviousViewInfos,
+		const FSceneTextureParameters& SceneTextures,
+		const FDiffuseIndirectHarmonic& Inputs,
+		const FAmbientOcclusionRayTracingConfig Config) const override;
+#endif
 
 	bool SupportsScreenSpaceDiffuseIndirectDenoiser(EShaderPlatform Platform) const override;
 

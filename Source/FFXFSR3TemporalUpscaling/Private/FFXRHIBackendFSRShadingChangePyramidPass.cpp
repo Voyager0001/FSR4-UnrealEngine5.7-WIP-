@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -54,20 +54,6 @@ public:
 	}
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
-#if UE_VERSION_AT_LEAST(5, 1, 0)
-		bool const bWaveOps = FDataDrivenShaderPlatformInfo::GetSupportsWaveOperations(Parameters.Platform) == ERHIFeatureSupport::RuntimeGuaranteed;
-#else
-		bool const bWaveOps = RHISupportsWaveOperations(Parameters.Platform);
-#endif
-		if (!bWaveOps)
-		{
-			OutEnvironment.SetDefine(TEXT("FFX_SPD_OPTION_WAVE_INTEROP_LDS"), TEXT("1"));
-			OutEnvironment.SetDefine(TEXT("FFX_SPD_NO_WAVE_OPERATIONS"), TEXT("1"));
-		}
-		else
-		{
-			OutEnvironment.CompilerFlags.Add(CFLAG_WaveOperations);
-		}
 		FFXFSRGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 	}
 

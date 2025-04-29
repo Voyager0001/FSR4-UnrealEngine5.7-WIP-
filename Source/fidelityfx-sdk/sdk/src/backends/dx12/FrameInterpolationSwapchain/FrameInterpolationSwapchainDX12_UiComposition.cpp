@@ -369,7 +369,7 @@ FFX_API FfxErrorCode ffxFrameInterpolationUiComposition(const FfxPresentCallback
         cpuView.ptr += dx12Device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         
         const D3D12_RESOURCE_DESC uiDesc                    = pResUI->GetDesc();
-        dx12SrvDescription.Format                           = ffxGetDX12FormatFromSurfaceFormat(params->currentUI.description.format);
+        dx12SrvDescription.Format                           = convertFormatSrv(ffxGetDX12FormatFromSurfaceFormat(params->currentUI.description.format));
         dx12SrvDescription.Texture2D.MipLevels              = uiDesc.MipLevels;
         dx12Device->CreateShaderResourceView(pResUI, &dx12SrvDescription, cpuView);
 

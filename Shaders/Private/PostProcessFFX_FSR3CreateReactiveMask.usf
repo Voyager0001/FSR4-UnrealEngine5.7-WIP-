@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -20,7 +20,9 @@
 // THE SOFTWARE.
 
 #include "/Engine/Private/Common.ush"
+#if UNREAL_VERSION >= 5
 #include "/Engine/Public/Platform.ush"
+#endif
 #include "/Engine/Private/ScreenPass.ush"
 #include "/Engine/Private/DeferredShadingCommon.ush"
 
@@ -113,6 +115,7 @@ void MainCS(uint3 LocalThreadId : SV_GroupThreadID, uint3 WorkGroupId : SV_Group
 		float DBufferAlpha = 1.f - DBufferA.SampleLevel(Sampler, TexelUV, 0).a;
 		float DBufferAlphaReactiveMask = DBufferAlpha * DeferredDecalReactiveMaskScale;
 		float DBufferAlphaReactiveHistory = DBufferAlpha * DeferredDecalReactiveHistoryScale;
+#if UNREAL_VERSION >= 5		
 		if (LumenSpecularCurrentFrame == 0)
 		{
 			float4 EncodedVelocity = InputVelocity[ThreadId];
@@ -131,6 +134,7 @@ void MainCS(uint3 LocalThreadId : SV_GroupThreadID, uint3 WorkGroupId : SV_Group
 			}
 		}
 		float4 Specular = LumenSpecular.SampleLevel(Sampler, TexelUV, 0);
+#endif
 		float2 TranslucencyContribution = float2(0.f, 0.f);
 
 		FGBufferData GBuffer = DecodeGBufferData(float4(0.f, 0.f, 0.f, 0.f),
@@ -193,11 +197,13 @@ void MainCS(uint3 LocalThreadId : SV_GroupThreadID, uint3 WorkGroupId : SV_Group
 			ReflectionContribution = lerp((Reflection.w * ReactiveMaskReflectionScale), 1.f, Output.w);
 			ReflectionContribution += (max(Output.z - ReflectionContribution, 0.f) * ReactiveMaskRoughnessBias);
 		}
+#if UNREAL_VERSION >= 5
 		else if ( any(Specular.xyz) && ReactiveMaskReflectionScale > 0.f )
 		{
 			ReflectionContribution = saturate(Luminance(Specular.xyz)) * ReactiveMaskReflectionScale * (1.f - Roughness);
 			ReflectionContribution += (max(Output.z - ReflectionContribution, 0.f) * ReactiveMaskRoughnessBias);
 		}
+#endif
 		else
 		{
 			ReflectionContribution = Output.z;

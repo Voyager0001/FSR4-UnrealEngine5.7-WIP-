@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -43,7 +43,6 @@ public class FFXRHIBackend : ModuleRules
 				"RenderCore",
 				"Renderer",
 				"RHI",
-				"RHICore",
 				"CoreUObject",
 				"FFXFSR3Api",
 				"FFXOpticalFlowApi",
@@ -52,6 +51,21 @@ public class FFXRHIBackend : ModuleRules
 				"FFXFSR3Settings"
 			}
 		);
+		
+		BuildVersion Version;
+		if (BuildVersion.TryRead(BuildVersion.GetDefaultFileName(), out Version))
+		{
+			if (Version.MajorVersion == 5 && Version.MinorVersion >= 0)
+			{
+				PrivateDependencyModuleNames.AddRange(
+					new string[]
+					{
+						"RHICore",
+						// ... add private dependencies that you statically link with here ...	
+					}
+					);
+			}
+		}
 
 		PrecompileForTargets = PrecompileTargetsType.Any;
 	}

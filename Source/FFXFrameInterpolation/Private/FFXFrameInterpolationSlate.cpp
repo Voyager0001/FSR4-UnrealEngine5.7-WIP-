@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -228,6 +228,7 @@ bool FFXFrameInterpolationSlateRenderer::GenerateDynamicImageResource(FName Reso
     return UnderlyingRenderer->GenerateDynamicImageResource(ResourceName, TextureData);
 }
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 #if UE_VERSION_AT_LEAST(5, 1, 0)
 FSlateResourceHandle FFXFrameInterpolationSlateRenderer::GetResourceHandle(const FSlateBrush& Brush, FVector2f LocalSize, float DrawScale)
 #else
@@ -236,6 +237,7 @@ FSlateResourceHandle FFXFrameInterpolationSlateRenderer::GetResourceHandle(const
 {
     return UnderlyingRenderer->GetResourceHandle(Brush, LocalSize, DrawScale);
 }
+#endif
 
 FSlateResourceHandle FFXFrameInterpolationSlateRenderer::GetResourceHandle(const FSlateBrush& Brush)
 {
@@ -331,20 +333,24 @@ void FFXFrameInterpolationSlateRenderer::PrepareToTakeScreenshot(const FIntRect&
     return UnderlyingRenderer->PrepareToTakeScreenshot(Rect, OutColorData, InScreenshotWindow);
 }
 
+#if UE_VERSION_OLDER_THAN(5, 5, 0)
 void FFXFrameInterpolationSlateRenderer::SetWindowRenderTarget(const SWindow& Window, class IViewportRenderTargetProvider* Provider)
 {
     return UnderlyingRenderer->SetWindowRenderTarget(Window, Provider);
 }
+#endif
 
 FSlateUpdatableTexture* FFXFrameInterpolationSlateRenderer::CreateUpdatableTexture(uint32 Width, uint32 Height)
 {
     return UnderlyingRenderer->CreateUpdatableTexture(Width, Height);
 }
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 FSlateUpdatableTexture* FFXFrameInterpolationSlateRenderer::CreateSharedHandleTexture(void* SharedHandle)
 {
     return UnderlyingRenderer->CreateSharedHandleTexture(SharedHandle);
 }
+#endif
 
 void FFXFrameInterpolationSlateRenderer::ReleaseUpdatableTexture(FSlateUpdatableTexture* Texture)
 {
@@ -390,11 +396,6 @@ int32 FFXFrameInterpolationSlateRenderer::GetCurrentSceneIndex() const
     return UnderlyingRenderer->GetCurrentSceneIndex();
 }
 
-void FFXFrameInterpolationSlateRenderer::SetCurrentSceneIndex(int32 InIndex)
-{
-    return UnderlyingRenderer->SetCurrentSceneIndex(InIndex);
-}
-
 void FFXFrameInterpolationSlateRenderer::ClearScenes()
 {
     return UnderlyingRenderer->ClearScenes();
@@ -423,3 +424,10 @@ EPixelFormat FFXFrameInterpolationSlateRenderer::GetSlateRecommendedColorFormat(
 {
     return UnderlyingRenderer->GetSlateRecommendedColorFormat();
 }
+
+#if UE_VERSION_AT_LEAST(5, 5, 0)
+void FFXFrameInterpolationSlateRenderer::SetCurrentSceneIndex(int32 index)
+{
+	return UnderlyingRenderer->SetCurrentSceneIndex(index);
+}
+#endif

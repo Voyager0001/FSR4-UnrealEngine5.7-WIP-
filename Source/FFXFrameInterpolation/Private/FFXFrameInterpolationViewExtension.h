@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -22,6 +22,7 @@
 #pragma once
 
 #include "SceneViewExtension.h"
+#include "Misc/EngineVersionComparison.h"
 
 class FFXFrameInterpolation;
 
@@ -31,6 +32,7 @@ class FFXFrameInterpolation;
 class FFXFrameInterpolationViewExtension final : public FSceneViewExtensionBase
 {
 	FFXFrameInterpolation* FrameInterpolation;
+	bool bFrameInterpolationSupported;
 public:
 	FFXFrameInterpolationViewExtension(const FAutoRegister& AutoRegister, FFXFrameInterpolation* InFrameInterpolation);
 
@@ -38,5 +40,10 @@ public:
 	void SetupViewFamily(FSceneViewFamily& InViewFamily) final {}
 	void SetupView(FSceneViewFamily& InViewFamily, FSceneView& InView) final {}
 	void BeginRenderViewFamily(FSceneViewFamily& InViewFamily) final {}
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+	void PreRenderViewFamily_RenderThread(FRHICommandListImmediate& RHICmdList, FSceneViewFamily& InViewFamily) final {}
+	void PreRenderView_RenderThread(FRHICommandListImmediate& RHICmdList, FSceneView& InView) final {}
+	void PostRenderViewFamily_RenderThread(FRHICommandListImmediate& RHICmdList, FSceneViewFamily& InViewFamily) final {}
+#endif
 	void PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessingInputs& Inputs) final;
 };

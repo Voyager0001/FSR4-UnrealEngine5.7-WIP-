@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -27,6 +27,12 @@ struct FFXBackendState;
 class FRDGBuilder;
 typedef struct FfxGpuJobDescription FfxGpuJobDescription;
 
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+using FVector3f = float[3];
+using FVector4f = float[4];
+typedef FVector2D FVector2f;
+typedef FIntPoint FUintVector2;
+#endif
 class FFXFI_DepthInverted : SHADER_PERMUTATION_BOOL("FFX_FRAMEINTERPOLATION_OPTION_INVERTED_DEPTH");
 
 //-------------------------------------------------------------------------------------
@@ -43,13 +49,13 @@ BEGIN_UNIFORM_BUFFER_STRUCT(FFXFrameInterpolationParameters, )
 	SHADER_PARAMETER(int32, reset)
 	SHADER_PARAMETER(FVector4f, fDeviceToViewDepth)
 	SHADER_PARAMETER(float, deltaTime)
-	SHADER_PARAMETER(FVector2f, UNUSED)
 	SHADER_PARAMETER(float, HUDLessAttachedFactor)
+	SHADER_PARAMETER(FIntPoint, distortionFieldSize)
 	SHADER_PARAMETER(FVector2f, opticalFlowScale)
 	SHADER_PARAMETER(int32, opticalFlowBlockSize)
 	SHADER_PARAMETER(uint32, dispatchFlags)
-    SHADER_PARAMETER(int32, opticalFlowHalfResMode)
     SHADER_PARAMETER(FIntPoint, maxRenderSize)
+    SHADER_PARAMETER(int32, opticalFlowHalfResMode)
     SHADER_PARAMETER(int32, NumInstances)
 	SHADER_PARAMETER(FIntPoint, interpolationRectBase)
 	SHADER_PARAMETER(FIntPoint, interpolationRectSize)
@@ -58,6 +64,8 @@ BEGIN_UNIFORM_BUFFER_STRUCT(FFXFrameInterpolationParameters, )
 	SHADER_PARAMETER(FVector2f, minMaxLuminance)
 	SHADER_PARAMETER(float, fTanHalfFOV)
 	SHADER_PARAMETER(float, _pad1)
+	SHADER_PARAMETER(FVector2f, fJitter)
+	SHADER_PARAMETER(FVector2f, fMotionVectorScale)
 END_UNIFORM_BUFFER_STRUCT()
 
 //-------------------------------------------------------------------------------------
@@ -103,6 +111,7 @@ public:
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, r_inpainting_mask)
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, r_inpainting_pyramid)
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, r_present_backbuffer)
+		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, r_input_distortion_field)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<uint>, r_counters)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D, rw_dilated_depth)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D, rw_dilated_motion_vectors)

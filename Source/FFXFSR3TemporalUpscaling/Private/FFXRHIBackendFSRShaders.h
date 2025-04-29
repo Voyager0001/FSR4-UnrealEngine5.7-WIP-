@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -23,6 +23,13 @@
 
 #include "FFXRHIBackendShaders.h"
 #include "ShaderParameterStruct.h"
+
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+using FVector3f = float[3];
+typedef FVector2D FVector2f;
+using FVector4f = float[4];
+typedef FIntPoint FUintVector2;
+#endif
 
 struct FFXBackendState;
 class FRDGBuilder;

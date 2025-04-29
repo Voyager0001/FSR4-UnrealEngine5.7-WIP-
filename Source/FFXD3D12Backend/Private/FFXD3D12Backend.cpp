@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -135,33 +135,41 @@ static EPixelFormat ffxGetSurfaceFormatDX12ToUE(DXGI_FORMAT format)
 	return UEFormat;
 }
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
+#define FFX_TEXTURE_CREATE_FLAGS(Name) ETextureCreateFlags::Name
+#else
+#define FFX_TEXTURE_CREATE_FLAGS(Name) TexCreate_##Name
+#endif
+
 static ETextureCreateFlags ffxGetSurfaceFlagsDX12ToUE(D3D12_RESOURCE_FLAGS flags)
 {
-	ETextureCreateFlags NewFlags = ETextureCreateFlags::None;
+	ETextureCreateFlags NewFlags = FFX_TEXTURE_CREATE_FLAGS(None);
 	switch(flags)
 	{
         case D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET:
-			NewFlags |= ETextureCreateFlags::RenderTargetable;
-			NewFlags |= ETextureCreateFlags::ShaderResource;
+			NewFlags |= FFX_TEXTURE_CREATE_FLAGS(RenderTargetable);
+			NewFlags |= FFX_TEXTURE_CREATE_FLAGS(ShaderResource);
 			break;
         case D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL:
-			NewFlags |= ETextureCreateFlags::DepthStencilTargetable;
-			NewFlags |= ETextureCreateFlags::ShaderResource;
+			NewFlags |= FFX_TEXTURE_CREATE_FLAGS(DepthStencilTargetable);
+			NewFlags |= FFX_TEXTURE_CREATE_FLAGS(ShaderResource);
 			break;
         case D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS:
-			NewFlags |= ETextureCreateFlags::UAV;
-			NewFlags |= ETextureCreateFlags::ShaderResource;
+			NewFlags |= FFX_TEXTURE_CREATE_FLAGS(UAV);
+			NewFlags |= FFX_TEXTURE_CREATE_FLAGS(ShaderResource);
 			break;
         case D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE:
-			NewFlags |= ETextureCreateFlags::DisableSRVCreation;
-			NewFlags &= ~ETextureCreateFlags::ShaderResource;
+			NewFlags |= FFX_TEXTURE_CREATE_FLAGS(DisableSRVCreation);
+			NewFlags &= ~FFX_TEXTURE_CREATE_FLAGS(ShaderResource);
 			break;
         case D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER:
         case D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS:
-			NewFlags |= ETextureCreateFlags::Shared;
+			NewFlags |= FFX_TEXTURE_CREATE_FLAGS(Shared);
 			break;
         case D3D12_RESOURCE_FLAG_VIDEO_DECODE_REFERENCE_ONLY:
+#if UE_VERSION_AT_LEAST(5, 0, 0)
         case D3D12_RESOURCE_FLAG_VIDEO_ENCODE_REFERENCE_ONLY:
+#endif
 		case D3D12_RESOURCE_FLAG_NONE:
 		default:
 			break;
@@ -548,10 +556,14 @@ public:
 
 	FfxCommandList GetNativeCommandBuffer(FRHICommandListImmediate& RHICmdList, FRHITexture* Texture) final
 	{
-#if UE_VERSION_AT_LEAST(5, 1, 0)
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 		ID3D12DynamicRHI* DynamicRHI = GetID3D12DynamicRHI();
 		uint32 const DeviceIndex = DynamicRHI->RHIGetResourceDeviceIndex(Texture);
 		FfxCommandList CmdList = reinterpret_cast<FfxCommandList>((ID3D12CommandList*)DynamicRHI->RHIGetGraphicsCommandList(RHICmdList, DeviceIndex));
+#elif UE_VERSION_AT_LEAST(5, 1, 0)
+		ID3D12DynamicRHI* DynamicRHI = GetID3D12DynamicRHI();
+		uint32 const DeviceIndex = DynamicRHI->RHIGetResourceDeviceIndex(Texture);
+		FfxCommandList CmdList = reinterpret_cast<FfxCommandList>((ID3D12CommandList*)DynamicRHI->RHIGetGraphicsCommandList(DeviceIndex));
 #else
 		void* CmdList = ((FD3D12CommandContext&)RHICmdList.GetContext()).CommandListHandle.GraphicsCommandList();
 #endif
@@ -672,6 +684,13 @@ public:
 
 		ffxFrameInterpolationUiComposition(&PresentParams, unusedUserCtx);
 
+		if (params->isGeneratedFrame)
+		{
+			FFX_RENDER_TEST_CAPTURE_PASS_BEGIN_DX12(TEXT("FFXFrameInterpolationUiCompositionCallback"));
+				FFX_RENDER_TEST_CAPTURE_PASS_ADD_DX12(params->device, params->commandList, PresentParams.outputSwapChainBuffer.resource, (uint32_t)GetDX12StateFromResourceState(PresentParams.outputSwapChainBuffer.state), 3, "SwapChainBuffer");
+			FFX_RENDER_TEST_CAPTURE_PASS_END_DX12;
+		}
+
 		{
 			double CurrentTime = FPlatformTime::Seconds();
 			float FrameTimeMS = (float)((CurrentTime - LastTime) * 1000.0);
@@ -706,6 +725,12 @@ public:
 			auto Code = ffxConfigure(Context, &Desc.header);
 			check(Code == FFX_API_RETURN_OK);
 		}
+	}
+
+	void UpdateSwapChain(ffxContext* Context, ffxConfigureDescFrameGeneration& Desc, ffxConfigureDescFrameGenerationRegisterDistortionFieldResource& DescDistortion)
+	{
+		Desc.header.pNext = &(DescDistortion.header);
+		UpdateSwapChain(Context, Desc);
 	}
 
 	FfxApiResource GetInterpolationOutput(FfxSwapchain SwapChain)
@@ -800,21 +825,18 @@ public:
 
 	void Flush(FRHITexture* Tex, FRHICommandListImmediate& RHICmdList) final
 	{
-		//ERHIPipeline Pipeline = RHICmdList.GetPipeline();
-		//SCOPED_GPU_MASK(RHICmdList, FRHIGPUMask::All());
-		//RHICmdList.SwitchPipeline(ERHIPipeline::Graphics);
-		//RHICmdList.SubmitCommandsAndFlushGPU();
-		
-		
 #if UE_VERSION_OLDER_THAN(5, 1, 0)
 		RHICmdList.SubmitCommandsHint();
 #else
 		RHICmdList.EnqueueLambda([this, Tex](FRHICommandListImmediate& cmd)
 		{
-			
 			ID3D12DynamicRHI* DynamicRHI = GetID3D12DynamicRHI();
 			uint32 const DeviceIndex = DynamicRHI->RHIGetResourceDeviceIndex(Tex);
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 			DynamicRHI->RHIFinishExternalComputeWork(cmd, DeviceIndex, (ID3D12GraphicsCommandList*)GetNativeCommandBuffer(cmd, Tex));
+#else
+			DynamicRHI->RHIFinishExternalComputeWork(DeviceIndex, (ID3D12GraphicsCommandList*)GetNativeCommandBuffer(cmd, Tex));
+#endif
 		});
 #endif
 	}
@@ -855,7 +877,6 @@ public:
 		Inner2 = Original;
 		Inner->AddRef();
 		check(Inner && Inner2);
-		
 	}
 
 	virtual ~FFXD3D12BackendDXGIFactory2Wrapper()
@@ -940,7 +961,94 @@ public:
 		/* [annotation][out] */
 		_COM_Outptr_  IDXGISwapChain1** ppSwapChain) final
 	{
-		return Inner2->CreateSwapChainForHwnd(pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, ppSwapChain);
+		HRESULT Result = E_INVALIDARG;
+		FFXD3D12SwapChain* D3D12SwapChain = nullptr;
+		IDXGISwapChain* RawSwapChain = nullptr;
+		FfxInterface* Interface = nullptr;
+		bool bOverrideSwapChain = ((CVarFSR3OverrideSwapChainDX12.GetValueOnAnyThread() != 0) || FParse::Param(FCommandLine::Get(), TEXT("fsr3swapchain")));
+
+		// Don't override the swapchain in the Editor - it causes too many issues
+#if WITH_EDITORONLY_DATA
+		bOverrideSwapChain &= !GIsEditor;
+#endif
+
+		HWND ParentWindow = hWnd ? ::GetParent(hWnd) : nullptr;
+		if (bOverrideSwapChain && !ParentWindow)
+		{
+			ID3D12CommandQueue* CmdQueue = (ID3D12CommandQueue*)pDevice;
+			check(CmdQueue);
+
+			DXGI_SWAP_CHAIN_DESC1 DescCopy = *pDesc;
+			DXGI_SWAP_CHAIN_FULLSCREEN_DESC FullscreenDescCopy = *pFullscreenDesc;
+
+			ffxCreateContextDescFrameGenerationSwapChainForHwndDX12 SwapChainDesc = {};
+			SwapChainDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_FOR_HWND_DX12;
+			SwapChainDesc.header.pNext = nullptr;
+			SwapChainDesc.swapchain = (IDXGISwapChain4**)&RawSwapChain;
+			SwapChainDesc.hwnd = hWnd;
+			SwapChainDesc.desc = &DescCopy;
+			SwapChainDesc.fullscreenDesc = &FullscreenDescCopy;
+			SwapChainDesc.dxgiFactory = Inner;
+			SwapChainDesc.gameQueue = CmdQueue;
+
+			ffxContext SwapChain = nullptr;
+			auto ReturnCode = Backend.ffxCreateContext(&SwapChain, (ffxCreateContextDescHeader*)&SwapChainDesc);
+			if (ReturnCode == FFX_API_RETURN_OK)
+			{
+				D3D12SwapChain = new FFXD3D12SwapChain(&Backend, SwapChain, (IDXGISwapChain4*)RawSwapChain);
+				D3D12SwapChain->AddRef();
+				Result = S_OK;
+
+				if (FParse::Param(FCommandLine::Get(), TEXT("fsr3hudless")))
+				{
+					CVarFFXFIUIMode->Set(1);
+				}
+				if (FParse::Param(FCommandLine::Get(), TEXT("fsr3async")))
+				{
+					CVarFSR3AllowAsyncWorkloads->Set(1);
+				}
+			}
+			else
+			{
+				Result = (HRESULT)ReturnCode;
+			}
+		}
+		else
+		{
+			Result = Inner2->CreateSwapChainForHwnd(pDevice, hWnd, pDesc, pFullscreenDesc, pRestrictToOutput, (IDXGISwapChain1**)&RawSwapChain);
+		}
+		if (Result == S_OK)
+		{
+			FIntPoint SwapChainSize = FIntPoint(pDesc->Width, pDesc->Height);
+			uint32 Flags = 0;
+			Flags |= bool(ERHIZBuffer::IsInverted) ? FFX_FRAMEINTERPOLATION_ENABLE_DEPTH_INVERTED : 0;
+			Flags |= FFX_FRAMEINTERPOLATION_ENABLE_DEPTH_INFINITE;
+			FfxApiSurfaceFormat SurfaceFormat = (FfxApiSurfaceFormat)ffxApiGetSurfaceFormatDX12(pDesc->Format);
+			IFFXFrameInterpolationCustomPresent* CustomPresent = FFXFrameInterpolation->CreateCustomPresent(&Backend, Flags, SwapChainSize, SwapChainSize, (FfxSwapchain)(D3D12SwapChain ? D3D12SwapChain : RawSwapChain), (FfxCommandQueue)pDevice, SurfaceFormat, EFFXBackendAPI::D3D12);
+			if (CustomPresent)
+			{
+				*ppSwapChain = (IDXGISwapChain1*)(D3D12SwapChain ? D3D12SwapChain : RawSwapChain);
+				if (bOverrideSwapChain)
+				{
+					bool bAllowAsyncWorkloads = (CVarFSR3AllowAsyncWorkloads.GetValueOnAnyThread() != 0);
+					bool bUIMode = (CVarFFXFIUIMode.GetValueOnAnyThread() != 0);
+					if (bAllowAsyncWorkloads || bUIMode)
+					{
+						CustomPresent->SetMode(EFFXFrameInterpolationPresentModeNative);
+					}
+					else
+					{
+						CustomPresent->SetUseFFXSwapchain(true);
+					}
+				}
+			}
+			else
+			{
+				Result = E_OUTOFMEMORY;
+			}
+		}
+
+		return Result;
 	}
 
 	HRESULT STDMETHODCALLTYPE CreateSwapChainForCoreWindow(
@@ -1298,7 +1406,7 @@ void FFXD3D12BackendModule::StartupModule()
 							if (bDisplaySupportsHDROutput)
 							{
 								CVarHDRMaxLuminance->Set(OutputDesc.MaxLuminance, ECVF_SetByConstructor);
-								CVarHDRMinLuminanceLog10->Set(log10(OutputDesc.MinLuminance), ECVF_SetByConstructor);
+								CVarHDRMinLuminanceLog10->Set(static_cast<float>(log10(OutputDesc.MinLuminance)), ECVF_SetByConstructor);
 								break;
 							}
 						}

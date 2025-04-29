@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -41,6 +41,7 @@ enum class ERHIAccess : uint32;
 #endif
 typedef struct FfxCreateResourceDescription FfxCreateResourceDescription;
 typedef struct ffxConfigureDescFrameGeneration ffxConfigureDescFrameGeneration;
+typedef struct ffxConfigureDescFrameGenerationRegisterDistortionFieldResource ffxConfigureDescFrameGenerationRegisterDistortionFieldResource;
 
 namespace FFXStrings
 {
@@ -77,6 +78,8 @@ struct FFXSharedAllocCallbacks
 	}
 };
 
+class FRDGBuilder;
+
 class IFFXSharedBackend
 {
 public:
@@ -98,12 +101,21 @@ public:
 	virtual bool IsFloat16Supported() = 0;
 	virtual void ForceUAVTransition(FRHICommandListImmediate& RHICmdList, FRHITexture* OutputTexture, ERHIAccess Access) = 0;
 	virtual void UpdateSwapChain(ffxContext* Context, ffxConfigureDescFrameGeneration& Desc) = 0;
+	virtual void UpdateSwapChain(ffxContext* Context, ffxConfigureDescFrameGeneration& Desc, ffxConfigureDescFrameGenerationRegisterDistortionFieldResource& DescDistortion) = 0;
+
 	virtual FfxApiResource GetInterpolationOutput(FfxSwapchain SwapChain) = 0;
 	virtual void* GetInterpolationCommandList(FfxSwapchain SwapChain) = 0;
 	virtual void RegisterFrameResources(FRHIResource* FIResources, uint64 FrameID) = 0;
 	virtual bool GetAverageFrameTimes(float& AvgTimeMs, float& AvgFPS) = 0;
 	virtual void CopySubRect(FfxCommandList CmdList, FfxApiResource Src, FfxApiResource Dst, FIntPoint OutputExtents, FIntPoint OutputPoint) = 0;
 	virtual void Flush(FRHITexture* Tex, FRHICommandListImmediate& RHICmdList) = 0;
+
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+	static FRDGBuilder* GetGraphBuilder() { return GraphBuilder; }
+	static void SetGraphBuilder(FRDGBuilder* InGraphBuilder) { GraphBuilder = InGraphBuilder; }
+private:
+	static FFXSHARED_API FRDGBuilder* GraphBuilder;
+#endif
 };
 
 extern FFXSHARED_API FfxApiSurfaceFormat GetFFXApiFormat(EPixelFormat UEFormat, bool bSRGB);

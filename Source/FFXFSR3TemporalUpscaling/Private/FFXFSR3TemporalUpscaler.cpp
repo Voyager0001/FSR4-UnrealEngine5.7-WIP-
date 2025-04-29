@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -24,6 +24,9 @@
 #include "FFXFSR3TemporalUpscaling.h"
 #include "FFXFSR3Include.h"
 #include "FFXFSR3TemporalUpscalerHistory.h"
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+#include "ScreenSpaceDenoise.h"
+#endif
 #include "SceneTextureParameters.h"
 #include "TranslucentRendering.h"
 #include "ScenePrivate.h"
@@ -43,6 +46,10 @@
 #include "FXRenderingUtils.h"
 #endif
 #include "FFXFSR3Settings.h"
+
+#if UE_VERSION_OLDER_THAN(4, 27, 0)
+#define GFrameCounterRenderThread GFrameNumberRenderThread
+#endif
 
 //------------------------------------------------------------------------------------------------------
 // GPU statistics for the FSR3 passes.
@@ -93,6 +100,7 @@ public:
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEZ"), ThreadgroupSizeZ);
 		OutEnvironment.SetDefine(TEXT("COMPUTE_SHADER"), 1);
 		OutEnvironment.SetDefine(TEXT("UNREAL_ENGINE_MAJOR_VERSION"), ENGINE_MAJOR_VERSION);
+		OutEnvironment.SetDefine(TEXT("UNREAL_ENGINE_MINOR_VERSION"), ENGINE_MINOR_VERSION);
 	}
 };
 IMPLEMENT_GLOBAL_SHADER(FFXFSR3ConvertVelocityCS, "/Plugin/FSR3/Private/PostProcessFFX_FSR3ConvertVelocity.usf", "MainCS", SF_Compute);
@@ -159,6 +167,11 @@ public:
 	}
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
+#if UE_VERSION_AT_LEAST(5, 0, 0)	
+		OutEnvironment.SetDefine(TEXT("UNREAL_VERSION"), 5);
+#else
+		OutEnvironment.SetDefine(TEXT("UNREAL_VERSION"), 4);
+#endif
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEX"), ThreadgroupSizeX);
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEY"), ThreadgroupSizeY);
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEZ"), ThreadgroupSizeZ);
@@ -195,6 +208,11 @@ public:
 	}
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
+#if UE_VERSION_AT_LEAST(5, 0, 0)	
+		OutEnvironment.SetDefine(TEXT("UNREAL_VERSION"), 5);
+#else
+		OutEnvironment.SetDefine(TEXT("UNREAL_VERSION"), 4);
+#endif
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEX"), ThreadgroupSizeX);
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEY"), ThreadgroupSizeY);
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEZ"), ThreadgroupSizeZ);
@@ -218,14 +236,19 @@ public:
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_RDG_BUFFER_SRV(StructuredBuffer<float4>, EyeAdaptationBuffer)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D, ExposureTexture)
-	END_SHADER_PARAMETER_STRUCT()
+		END_SHADER_PARAMETER_STRUCT()
 
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+		static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
 		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
+#if UE_VERSION_AT_LEAST(5, 0, 0)	
+		OutEnvironment.SetDefine(TEXT("UNREAL_VERSION"), 5);
+#else
+		OutEnvironment.SetDefine(TEXT("UNREAL_VERSION"), 4);
+#endif
 		OutEnvironment.SetDefine(TEXT("COMPUTE_SHADER"), 1);
 	}
 };
@@ -288,28 +311,44 @@ struct FFXFSR3ScreenSpaceReflectionsPS
 //------------------------------------------------------------------------------------------------------
 // In order to access the Lumen reflection data prior to our code executing it is necessary to gain access to FFXFSR3RDGBuilder internals.
 //------------------------------------------------------------------------------------------------------
-
+#if UE_VERSION_AT_LEAST(5, 3, 0)
 struct FFXFSR3ParallelPassSet : public FRHICommandListImmediate::FQueuedCommandList
 {
 	FFXFSR3ParallelPassSet() = default;
 
 	TArray<FRDGPass*, FRDGArrayAllocator> Passes;
+#if UE_VERSION_OLDER_THAN(5, 5, 0)
+	IF_RHI_WANT_BREADCRUMB_EVENTS(FRDGBreadcrumbState* BreadcrumbStateBegin{});
+	IF_RHI_WANT_BREADCRUMB_EVENTS(FRDGBreadcrumbState* BreadcrumbStateEnd{});
 	int8 bInitialized = 0;
+#endif
 	bool bDispatchAfterExecute = false;
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 	bool bTaskModeAsync = false;
+#else
+	bool bParallelTranslate = false;
+#endif
 };
+#endif
 
 
-
-
+#if UE_VERSION_AT_LEAST(5, 1, 0)
+#if UE_VERSION_AT_LEAST(5, 5, 0)
+class FFXFSR3RDGBuilder : FRDGScopeState
+#elif UE_VERSION_AT_LEAST(5, 4, 0)
 class FFXFSR3RDGBuilder
-	: public FRDGScopeState
+#else
+class FFXFSR3RDGBuilder : FRDGAllocatorScope
+#endif
 {
+#if UE_VERSION_AT_LEAST(5, 4, 0)
 	struct FAsyncDeleter
 	{
 		TUniqueFunction<void()> Function;
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 		UE::Tasks::FTask Prerequisites;
-		static UE::Tasks::FTask LastTask;
+#endif
+		//static UE::Tasks::FTask LastTask;
 
 		RENDERCORE_API ~FAsyncDeleter()
 		{
@@ -330,17 +369,43 @@ class FFXFSR3RDGBuilder
 	} Allocators;
 
 	FRDGAllocatorScope RootAllocatorScope;
-
+#endif
 
 public:
 	FFXFSR3RDGBuilder(FRHICommandListImmediate& InRHICmdList, FRDGEventName InName = {}, ERDGBuilderFlags InFlags = ERDGBuilderFlags::None)
-		: FRDGScopeState(InRHICmdList, true, true && EnumHasAnyFlags(InFlags, ERDGBuilderFlags::ParallelExecute)) //FRDGScopeState(InRHICmdList, ::IsImmediateMode(), ::IsParallelExecuteEnabled() && EnumHasAnyFlags(InFlags, ERDGBuilderFlags::ParallelExecute)) come back to this
+#if UE_VERSION_AT_LEAST(5, 5, 0)
+		: FRDGScopeState(InRHICmdList, true, true)
 		, RootAllocatorScope(Allocators.Transition)
+#elif UE_VERSION_AT_LEAST(5, 4, 0)
+		: RootAllocatorScope(Allocators.Transition)
+		, RHICmdList(InRHICmdList)
+#else
+		: RHICmdList(InRHICmdList)
+#endif
 		, BuilderName(InName)
+#if UE_VERSION_OLDER_THAN(5, 4, 0)
+		, CompilePipe(TEXT("FFXFSR3RDGCompilePipe"))
+#if RDG_CPU_SCOPES
+
+		, CPUScopeStacks(Allocator)
+#endif
+		, GPUScopeStacks(Allocator)
+#endif
+#if UE_VERSION_AT_LEAST(5, 4, 0)
 		, ExtendResourceLifetimeScope(InRHICmdList)
+#endif
 #if RDG_ENABLE_DEBUG
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 		, UserValidation(Allocators.Transition)
+#elif UE_VERSION_AT_LEAST(5, 4, 0)
+		, UserValidation(Allocators.Transition, false)
+#else
+		, UserValidation(Allocator, bParallelExecuteEnabled)
+#endif
 		, BarrierValidation(&Passes, BuilderName)
+#endif
+#if UE_VERSION_AT_LEAST(5, 2, 0) && UE_VERSION_OLDER_THAN(5, 4, 0)
+		, ExtendResourceLifetimeScope(InRHICmdList)
 #endif
 	{
 	}
@@ -350,7 +415,9 @@ public:
 	{
 	}
 
-	//FRHICommandListImmediate& RHICmdList;
+#if UE_VERSION_OLDER_THAN(5, 5, 0)
+	FRHICommandListImmediate& RHICmdList;
+#endif
 	struct FFXFSR3BlackBoard
 	{
 		FRDGAllocator* Allocator;
@@ -378,7 +445,17 @@ private:
 	FRDGPass* EpiloguePass = nullptr;
 	uint32 AsyncComputePassCount = 0;
 	uint32 RasterPassCount = 0;
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 	TArray<FRDGDispatchPass*, FRDGArrayAllocator> DispatchPasses;
+#else
+	EAsyncComputeBudget AsyncComputeBudgetScope = EAsyncComputeBudget::EAll_4;
+	EAsyncComputeBudget AsyncComputeBudgetState = EAsyncComputeBudget(~0u);
+	IF_RDG_CMDLIST_STATS(TStatId CommandListStatScope);
+	IF_RDG_CMDLIST_STATS(TStatId CommandListStatState);
+	IF_RDG_CPU_SCOPES(FRDGCPUScopeStacks CPUScopeStacks);
+	FRDGGPUScopeStacksByPipeline GPUScopeStacks;
+	IF_RHI_WANT_BREADCRUMB_EVENTS(FRDGBreadcrumbState* BreadcrumbState{});
+#endif
 	FRDGPassRegistry Passes;
 	FRDGTextureRegistry Textures;
 	FRDGBufferRegistry Buffers;
@@ -423,6 +500,7 @@ private:
 
 	struct FAsyncSetupOp
 	{
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 		enum class EType : uint8
 		{
 			SetupPassResources,
@@ -430,14 +508,21 @@ private:
 			CullRootTexture,
 			ReservedBufferCommit
 		};
-
-		EType GetType() const
+#else
+		enum class EType
 		{
-			return (EType)Type;
-		}
+			SetupPassResources,
+			CullRootBuffer,
+			CullRootTexture
+		};
+#endif
 
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 		uint64 Type : 8;
 		uint64 Payload : 48;
+#else
+		EType Type;
+#endif
 
 		union
 		{
@@ -451,41 +536,49 @@ private:
 	{
 		UE::FMutex Mutex;
 		TArray<FAsyncSetupOp, FRDGArrayAllocator> Ops;
+#if UE_VERSION_OLDER_THAN(5, 5, 0)
+		UE::Tasks::FTask LastTask;
+#endif
 		UE::Tasks::FPipe Pipe{ TEXT("FRDGBuilder::AsyncSetupQueue") };
 
 	} AsyncSetupQueue;
 
-	uint64 GetReservedCommitSize(FRDGBufferReservedCommitHandle Handle)
-	{
-		return Handle.IsValid() ? ReservedBufferCommitSizes[Handle.GetIndex()] : 0;
-	}
-
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 	TArray<uint64, FRDGArrayAllocator> ReservedBufferCommitSizes;
+#endif
 
 	TArray<FRDGPass*, FRDGArrayAllocator> CullPassStack;
 
 	struct
 	{
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 		TStaticArray<TArray<UE::Tasks::FTask, FRDGArrayAllocator>, (int32)ERDGSetupTaskWaitPoint::MAX> Tasks;
+#else
+		TArray<UE::Tasks::FTask, FRDGArrayAllocator> Tasks;
+		TArray<FRHICommandListImmediate::FQueuedCommandList, FConcurrentLinearArrayAllocator> CommandLists;
+#endif
 		bool bEnabled = false;
 
 	} ParallelSetup;
 
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 	bool bParallelCompileEnabled = false;
+#endif
 
 	struct FParallelExecute
 	{
 		TArray<FFXFSR3ParallelPassSet, FRDGArrayAllocator> ParallelPassSets;
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 		TOptional<UE::Tasks::FTaskEvent> TasksAwait;
 		TOptional<UE::Tasks::FTaskEvent> TasksAsync;
 		TOptional<UE::Tasks::FTaskEvent> DispatchTaskEventAwait;
 		TOptional<UE::Tasks::FTaskEvent> DispatchTaskEventAsync;
 		ERDGPassTaskMode TaskMode = ERDGPassTaskMode::Inline;
-
-		bool IsEnabled() const { return TaskMode != ERDGPassTaskMode::Inline; }
-
-		static UE::Tasks::FTask LastAsyncExecuteTask;
-
+#else
+		TArray<UE::Tasks::FTask, FRDGArrayAllocator> Tasks;
+		TOptional<UE::Tasks::FTaskEvent> DispatchTaskEvent;
+		bool bEnabled = false;
+#endif
 	} ParallelExecute;
 
 	struct FUploadedBuffer
@@ -505,8 +598,12 @@ private:
 
 	TArray<FRDGViewableResource*, FRDGArrayAllocator> AccessModeQueue;
 	TSet<FRDGViewableResource*, DefaultKeyFuncs<FRDGViewableResource*>, FRDGSetAllocator> ExternalAccessResources;
+
+#if UE_VERSION_AT_LEAST(5, 5, 0)
 	TArray<TUniqueFunction<void()>, FRDGArrayAllocator> PostExecuteCallbacks;
+
 	FGraphEventArray WaitOutstandingTasks;
+#endif
 	bool bFlushResourcesRHI = false;
 	FRHICommandListScopedExtendResourceLifetime ExtendResourceLifetimeScope;
 
@@ -518,9 +615,7 @@ private:
 		uint8 FlushAccessModeQueue = 0;
 	} AuxiliaryPasses;
 
-
-#if WITH_MGPU
-	/** Copy all cross GPU external resources (not marked MultiGPUGraphIgnore) at the end of execution (bad for perf, but useful for debugging). */
+#if UE_VERSION_AT_LEAST(5, 5, 0) && WITH_MGPU
 	bool bForceCopyCrossGPU = false;
 #endif
 
@@ -530,15 +625,179 @@ private:
 	FRDGUserValidation UserValidation;
 	FRDGBarrierValidation BarrierValidation;
 #endif
+
+#else // 5.0.3 or older
+	FRDGPassRegistry Passes;
+	FRDGTextureRegistry Textures;
+	FRDGBufferRegistry Buffers;
+	FRDGViewRegistry Views;
+	FRDGUniformBufferRegistry UniformBuffers;
+	TArray<FRDGUniformBufferHandle, FRDGArrayAllocator> UniformBuffersToCreate;
+	TSortedMap<FRHITexture*, FRDGTexture*, FRDGArrayAllocator> ExternalTextures;
+	TSortedMap<FRHIBuffer*, FRDGBuffer*, FRDGArrayAllocator> ExternalBuffers;
+	TMap<FRDGPooledTexture*, FRDGTexture*, FRDGSetAllocator> PooledTextureOwnershipMap;
+	TMap<FRDGPooledBuffer*, FRDGBuffer*, FRDGSetAllocator> PooledBufferOwnershipMap;
+	TArray<TRefCountPtr<IPooledRenderTarget>, FRDGArrayAllocator> ActivePooledTextures;
+	TArray<TRefCountPtr<FRDGPooledBuffer>, FRDGArrayAllocator> ActivePooledBuffers;
+	TMap<FRDGBarrierBatchBeginId, FRDGBarrierBatchBegin*, FRDGSetAllocator> BarrierBatchMap;
+	FRDGTransitionCreateQueue TransitionCreateQueue;
+
+	template <typename LambdaType>
+	UE::Tasks::FTask LaunchCompileTask(const TCHAR* Name, bool bCondition, LambdaType&& Lambda);
+
+	UE::Tasks::FPipe CompilePipe;
+
+	class FPassQueue
+	{
+		TLockFreePointerListFIFO<FRDGPass, PLATFORM_CACHE_LINE_SIZE> Queue;
+		UE::Tasks::FTask LastTask;
+	};
+
+	FPassQueue SetupPassQueue;
+
+	TArray<FRDGPassHandle, FRDGArrayAllocator> CullPassStack;
+
+	FRDGPass* ProloguePass;
+	FRDGPass* EpiloguePass;
+
+	struct FExtractedTexture
+	{
+		FRDGTexture* Texture{};
+		TRefCountPtr<IPooledRenderTarget>* PooledTexture{};
+	};
+
+	TArray<FExtractedTexture, FRDGArrayAllocator> ExtractedTextures;
+
+	struct FExtractedBuffer
+	{
+		FRDGBuffer* Buffer{};
+		TRefCountPtr<FRDGPooledBuffer>* PooledBuffer{};
+	};
+
+	TArray<FExtractedBuffer, FRDGArrayAllocator> ExtractedBuffers;
+
+	struct FUploadedBuffer
+	{
+		bool bUseDataCallbacks;
+		bool bUseFreeCallbacks;
+		FRDGBuffer* Buffer{};
+		const void* Data{};
+		uint64 DataSize{};
+		FRDGBufferInitialDataCallback DataCallback;
+		FRDGBufferInitialDataSizeCallback DataSizeCallback;
+		FRDGBufferInitialDataFreeCallback DataFreeCallback;
+	};
+
+	TArray<FUploadedBuffer, FRDGArrayAllocator> UploadedBuffers;
+
+#if UE_VERSION_OLDER_THAN(5, 3, 0)
+	struct FParallelPassSet : public FRHICommandListImmediate::FQueuedCommandList
+	{
+		TArray<FRDGPass*, FRDGArrayAllocator> Passes;
+		IF_RHI_WANT_BREADCRUMB_EVENTS(FRDGBreadcrumbState* BreadcrumbStateBegin{});
+		IF_RHI_WANT_BREADCRUMB_EVENTS(FRDGBreadcrumbState* BreadcrumbStateEnd{});
+		int8 bInitialized;
+		bool bDispatchAfterExecute;
+#if UE_VERSION_AT_LEAST(5, 2, 0)
+		bool bParallelTranslate;
+#endif
+	};
+#endif
+
+#if UE_VERSION_AT_LEAST(5, 3, 0)
+	TArray<FFXFSR3ParallelPassSet, FRDGArrayAllocator> ParallelPassSets;
+#else
+	TArray<FParallelPassSet, FRDGArrayAllocator> ParallelPassSets;
+#endif
+
+	TArray<UE::Tasks::FTask, FRDGArrayAllocator> ParallelExecuteEvents;
+
+	TArray<UE::Tasks::FTask, FRDGArrayAllocator> ParallelSetupEvents;
+
+	TArray<FRHITrackedAccessInfo, FRDGArrayAllocator> EpilogueResourceAccesses;
+
+	TArray<FRDGViewableResource*, FRDGArrayAllocator> AccessModeQueue;
+	TSet<FRDGViewableResource*, DefaultKeyFuncs<FRDGViewableResource*>, FRDGSetAllocator> ExternalAccessResources;
+
+	FRDGTextureSubresourceStateIndirect ScratchTextureState;
+
+	EAsyncComputeBudget AsyncComputeBudgetScope;
+	EAsyncComputeBudget AsyncComputeBudgetState;
+
+	FRHICommandList* RHICmdListBufferUploads;
+
+	IF_RDG_CPU_SCOPES(FRDGCPUScopeStacks CPUScopeStacks);
+	FRDGGPUScopeStacksByPipeline GPUScopeStacks;
+	IF_RHI_WANT_BREADCRUMB_EVENTS(FRDGBreadcrumbState* BreadcrumbState{});
+
+	IF_RDG_ENABLE_TRACE(FRDGTrace Trace);
+
+	bool bFlushResourcesRHI;
+	bool bParallelExecuteEnabled;
+	bool bParallelSetupEnabled;
+#if UE_VERSION_AT_LEAST(5, 2, 0)
+	bool bFinalEventScopeActive;
+#endif
+
+#if RDG_ENABLE_DEBUG
+	FRDGUserValidation UserValidation;
+	FRDGBarrierValidation BarrierValidation;
+#endif
+
+	struct FAuxiliaryPass
+	{
+		uint8 Clobber;
+		uint8 Visualize;
+		uint8 Dump;
+		uint8 FlushAccessModeQueue;
+	} AuxiliaryPasses;
+
+#if WITH_MGPU
+#if UE_VERSION_OLDER_THAN(5, 2, 0)
+	FName NameForTemporalEffect;
+	bool bWaitedForTemporalEffect;
+#endif
+	bool bForceCopyCrossGPU;
+#endif // WITH_MGPU
+
+	uint32 AsyncComputePassCount;
+	uint32 RasterPassCount;
+
+	IF_RDG_CMDLIST_STATS(TStatId CommandListStatScope);
+	IF_RDG_CMDLIST_STATS(TStatId CommandListStatState);
+
+	IRHITransientResourceAllocator* TransientResourceAllocator;
+
+#if UE_VERSION_AT_LEAST(5, 2, 0)
+	FRHICommandListScopedExtendResourceLifetime ExtendResourceLifetimeScope;
+#endif
+
+#endif
 };
 static_assert(sizeof(FRDGBuilder) == sizeof(FFXFSR3RDGBuilder), "FFXFSR3RDGBuilder must match the layout of FRDGBuilder so we can access the Lumen reflection texture!");
 
-//#if UE_VERSION_AT_LEAST(5, 5, 0)
-//#error "Unsupported Unreal Engine 5 version - update the definition for FFXFSR3RDGBuilder."
-//#endif
+#if UE_VERSION_AT_LEAST(5, 6, 0)
+#error "Unsupported Unreal Engine 5 version - update the definition for FFXFSR3RDGBuilder."
+#endif
 
 #endif
 
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+//------------------------------------------------------------------------------------------------------
+// In order to access the separate translucency data prior to our code executing it is necessary to gain access to FSeparateTranslucencyTextures internals.
+//------------------------------------------------------------------------------------------------------
+class FSeparateTranslucencyTexturesAccessor
+{
+public:
+	FSeparateTranslucencyDimensions Dimensions;
+	FRDGTextureMSAA ColorTexture;
+	FRDGTextureMSAA ColorModulateTexture;
+#if UE_VERSION_AT_LEAST(4, 27, 0)
+	FRDGTextureMSAA DepthTexture;
+#endif
+};
+static_assert(sizeof(FSeparateTranslucencyTextures) == sizeof(FSeparateTranslucencyTexturesAccessor), "FSeparateTranslucencyTexturesAccessor must match the layout of FSeparateTranslucencyTextures so we can access the translucency texture!");
+#endif
 
 //------------------------------------------------------------------------------------------------------
 // Internal function definitions
@@ -611,7 +870,11 @@ static int32 FFXFSR3GetRayTracingReflectionsSamplesPerPixel(const FViewInfo& Vie
 
 static bool FFXFSR3ShouldRenderRayTracingReflections(const FViewInfo& View)
 {
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 	const bool bThisViewHasRaytracingReflections = View.FinalPostProcessSettings.ReflectionMethod == EReflectionMethod::RayTraced;
+#else
+	const bool bThisViewHasRaytracingReflections = View.FinalPostProcessSettings.ReflectionsType == EReflectionsType::RayTracing;
+#endif
 
 	static IConsoleVariable* RayTracingReflections = IConsoleManager::Get().FindConsoleVariable(TEXT("r.RayTracing.Reflections"));
 	const bool bReflectionsCvarEnabled = RayTracingReflections && RayTracingReflections->GetInt() < 0
@@ -627,7 +890,7 @@ static bool FFXFSR3ShouldRenderRayTracingReflections(const FViewInfo& View)
 bool IsFFXFSR3SSRTemporalPassRequired(const FViewInfo& View)
 {
 	static const auto CVarSSRTemporalEnabled = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.SSR.Temporal"));
-
+	
 	if (!View.State)
 	{
 		return false;
@@ -653,6 +916,7 @@ static inline float FFXFSR3GetScreenResolutionFromScalingMode(IFFXSharedBackend*
 	return 1.0f / UpscaleRatio;
 }
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 //------------------------------------------------------------------------------------------------------
 // Whether to use Lumen reflection data or not.
 //------------------------------------------------------------------------------------------------------
@@ -679,6 +943,7 @@ static bool IsUsingLumenReflections(const FViewInfo& View)
 
 	return false;
 }
+#endif
 
 //------------------------------------------------------------------------------------------------------
 // Definition of inputs & outputs for the FSR3 FX pass used to copy the SceneColor.
@@ -708,7 +973,11 @@ public:
 		return InName == FFXFSR3FXSystem::FXName ? this : nullptr;
 	}
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 	void Tick(UWorld*, float DeltaSeconds) final {}
+#else
+	void Tick(float DeltaSeconds) final {}
+#endif
 
 #if WITH_EDITOR
 	void Suspend() final {}
@@ -727,10 +996,14 @@ public:
 #if UE_VERSION_AT_LEAST(5, 3, 0)
 	void PreInitViews(FRDGBuilder&, bool, const TArrayView<const FSceneViewFamily*>&, const FSceneViewFamily*) final {};
 	void PostInitViews(FRDGBuilder&, TConstStridedView<FSceneView>, bool) final {};
-#else
+#elif UE_VERSION_AT_LEAST(5, 0, 0)
 	void PreInitViews(FRDGBuilder&, bool) final {}
 
 	void PostInitViews(FRDGBuilder&, TArrayView<const FViewInfo, int32>, bool) final {}
+#else
+	void PreInitViews(FRHICommandListImmediate& RHICmdList, bool bAllowGPUParticleUpdate) final {}
+
+	void PostInitViews(FRHICommandListImmediate& RHICmdList, FRHIUniformBuffer* ViewUniformBuffer, bool bAllowGPUParticleUpdate) final {}
 #endif
 
 	bool UsesGlobalDistanceField() const final { return false; }
@@ -739,8 +1012,11 @@ public:
 
 	bool RequiresEarlyViewUniformBuffer() const final { return false; }
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 	bool RequiresRayTracingScene() const final { return false; }
+#endif
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 #if UE_VERSION_AT_LEAST(5, 3, 0)
 	void PreRender(FRDGBuilder&, TConstStridedView<FSceneView>, FSceneUniformBuffer&, bool) final {};
 	void PostRenderOpaque(FRDGBuilder& GraphBuilder, TConstStridedView<FSceneView> Views, FSceneUniformBuffer& SceneUniformBuffer, bool bAllowGPUParticleUpdate) final
@@ -914,20 +1190,32 @@ public:
 			);
 		}
 	}
+#else
+	void PreRender(FRHICommandListImmediate& RHICmdList, const class FGlobalDistanceFieldParameterData* GlobalDistanceFieldParameterData, bool bAllowGPUParticleSceneUpdate) final {}
+	void PostRenderOpaque(
+		FRHICommandListImmediate& RHICmdList,
+		FRHIUniformBuffer* ViewUniformBuffer,
+		const class FShaderParametersMetadata* SceneTexturesUniformBufferStruct,
+		FRHIUniformBuffer* SceneTexturesUniformBuffer,
+		bool bAllowGPUParticleUpdate) final
+	{
+		Upscaler->CopyOpaqueSceneColor(RHICmdList, ViewUniformBuffer, nullptr, this->SceneTexturesUniformParams);
+	}
+#endif
 
 #if UE_VERSION_AT_LEAST(5, 2, 0)
 	void SetSceneTexturesUniformBuffer(const TUniformBufferRef<FSceneTextureUniformParameters>& InSceneTexturesUniformParams) final { SceneTexturesUniformParams = InSceneTexturesUniformParams; }
-#else
+#elif UE_VERSION_AT_LEAST(5, 0, 0)
 	void SetSceneTexturesUniformBuffer(FRHIUniformBuffer* InSceneTexturesUniformParams) final { SceneTexturesUniformParams = InSceneTexturesUniformParams; }
 #endif
 
-	FGPUSortManager* GetGPUSortManager() const
+	FGPUSortManager* GetGPUSortManager() const 
 	{
 		return GPUSortManager;
 	}
 
 	FFXFSR3FXSystem(FFXFSR3TemporalUpscaler* InUpscaler, FGPUSortManager* InGPUSortManager)
-		: GPUSortManager(InGPUSortManager)
+	: GPUSortManager(InGPUSortManager)
 		, Upscaler(InUpscaler)
 	{
 		check(GPUSortManager && Upscaler);
@@ -956,11 +1244,11 @@ struct FFXFSR3Pass
 // FFXFSR3TemporalUpscaler implementation.
 //------------------------------------------------------------------------------------------------------
 FFXFSR3TemporalUpscaler::FFXFSR3TemporalUpscaler()
-	: Api(EFFXBackendAPI::Unknown)
-	, ApiAccessor(nullptr)
-	, CurrentGraphBuilder(nullptr)
-	, WrappedDenoiser(nullptr)
-	, ReflectionTexture(nullptr)
+: Api(EFFXBackendAPI::Unknown)
+, ApiAccessor(nullptr)
+, CurrentGraphBuilder(nullptr)
+, WrappedDenoiser(nullptr)
+, ReflectionTexture(nullptr)
 {
 	FMemory::Memzero(PostInputs);
 
@@ -973,11 +1261,11 @@ FFXFSR3TemporalUpscaler::FFXFSR3TemporalUpscaler()
 
 	FFXFSR3TemporalUpscaler* self = this;
 	FFXSystemInterface::RegisterCustomFXSystem(
-		FFXFSR3FXSystem::FXName,
+		FFXFSR3FXSystem::FXName, 
 		FCreateCustomFXSystemDelegate::CreateLambda([self](ERHIFeatureLevel::Type InFeatureLevel, EShaderPlatform InShaderPlatform, FGPUSortManager* InGPUSortManager) -> FFXSystemInterface*
-			{
-				return new FFXFSR3FXSystem(self, InGPUSortManager);
-			}));
+	{
+		return new FFXFSR3FXSystem(self, InGPUSortManager);
+	}));
 
 	FConsoleVariableDelegate EnabledChangedDelegate = FConsoleVariableDelegate::CreateStatic(&FFXFSR3TemporalUpscaler::OnChangeFFXFSR3Enabled);
 	CVarEnableFSR3->SetOnChangedCallback(EnabledChangedDelegate);
@@ -1066,7 +1354,11 @@ IFFXSharedBackend* FFXFSR3TemporalUpscaler::GetApiAccessor(EFFXBackendAPI& Api)
 	}
 #endif
 	// The fallback implementation requires SM6
-	if ((!ApiAccessor || (CVarFSR3UseRHI.GetValueOnAnyThread() || FParse::Param(FCommandLine::Get(), TEXT("fsr3rhi")))) && IsFeatureLevelSupported(GMaxRHIShaderPlatform, ERHIFeatureLevel::SM6))
+	bool bSupportsFallback = ((RHIName == FFXFSR3Strings::D3D12) && (GMaxRHIShaderPlatform == SP_PCD3D_SM5));
+#if UE_VERSION_AT_LEAST(5, 0, 0)
+	bSupportsFallback |= IsFeatureLevelSupported(GMaxRHIShaderPlatform, ERHIFeatureLevel::SM6);
+#endif
+	if ((!ApiAccessor || (CVarFSR3UseRHI.GetValueOnAnyThread() || FParse::Param(FCommandLine::Get(), TEXT("fsr3rhi")))) && bSupportsFallback)
 	{
 		IFFXSharedBackendModule* RHIBackend = FModuleManager::GetModulePtr<IFFXSharedBackendModule>(TEXT("FFXRHIBackend"));
 		if (RHIBackend)
@@ -1159,7 +1451,7 @@ void FFXFSR3TemporalUpscaler::Initialize() const
 		FString RHIName = GDynamicRHI->GetName();
 
 		ApiAccessor = GetApiAccessor(Api);
-
+		
 		if (!ApiAccessor)
 		{
 			Api = EFFXBackendAPI::Unsupported;
@@ -1180,10 +1472,21 @@ void FFXFSR3TemporalUpscaler::Initialize() const
 	}
 }
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 	FRDGBuilder& GraphBuilder,
 	const FFXFSR3View& SceneView,
 	const FFXFSR3PassInput& PassInputs) const
+#else
+void FFXFSR3TemporalUpscaler::AddPasses(
+	FRDGBuilder& GraphBuilder,
+	const FFXFSR3View& SceneView,
+	const FFXFSR3PassInput& PassInputs,
+	FRDGTextureRef* OutSceneColorTexture,
+	FIntRect* OutSceneColorViewRect,
+	FRDGTextureRef* OutSceneColorHalfResTexture,
+	FIntRect* OutSceneColorHalfResViewRect) const
+#endif
 {
 #if UE_VERSION_AT_LEAST(5, 3, 0)
 	const FViewInfo& View = (FViewInfo&)(SceneView);
@@ -1218,12 +1521,17 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 	if (IsApiSupported() && (View.PrimaryScreenPercentageMethod == EPrimaryScreenPercentageMethod::TemporalUpscale) && (InputExtents.X <= OutputExtents.X) && (InputExtents.Y <= OutputExtents.Y))
 #endif
 	{
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 		ITemporalUpscaler::FOutputs Outputs;
+#endif
 
 		RDG_GPU_STAT_SCOPE(GraphBuilder, FidelityFXSuperResolution3Pass);
 		RDG_EVENT_SCOPE(GraphBuilder, "FidelityFXSuperResolution3Pass");
 
 		CurrentGraphBuilder = &GraphBuilder;
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+		IFFXSharedBackend::SetGraphBuilder(&GraphBuilder);
+#endif
 
 		const bool CanWritePrevViewInfo = !View.bStatePrevViewInfoIsReadOnly && View.ViewState;
 
@@ -1269,25 +1577,46 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 				FFXFSR3CreateReactiveMaskCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FFXFSR3CreateReactiveMaskCS::FParameters>();
 				PassParameters->Sampler = TStaticSamplerState<SF_Point>::GetRHI();
 
+#if UE_VERSION_AT_LEAST(5, 1, 0)
 				FFXFSR3RDGBuilder& GraphBulderAccessor = (FFXFSR3RDGBuilder&)GraphBuilder;
 				FRDGTextureRef DBufferA = GraphBulderAccessor.FindTexture(TEXT("DBufferA"));
 				if (!DBufferA || !HasBeenProduced(DBufferA))
 				{
 					DBufferA = GraphBuilder.RegisterExternalTexture(GSystemTextures.WhiteDummy);
 				}
+#else
+				FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(GraphBuilder.RHICmdList);
+				FRDGTextureRef DBufferA;
+				if(SceneContext.DBufferA.IsValid())
+				{
+					DBufferA = GraphBuilder.RegisterExternalTexture(SceneContext.DBufferA, ERenderTargetTexture::ShaderResource);
+				}
+				else
+				{
+					DBufferA = GraphBuilder.RegisterExternalTexture(GSystemTextures.WhiteDummy);
+				}
+#endif
 				PassParameters->DeferredDecalReactiveMaskScale = CVarFSR3ReactiveMaskDeferredDecalScale.GetValueOnAnyThread();
 				PassParameters->DeferredDecalReactiveHistoryScale = CVarFSR3ReactiveHistoryDeferredDecalScale.GetValueOnAnyThread();
 
 				FRDGTextureRef SeparateTranslucency;
-#if UE_VERSION_OLDER_THAN(5, 3, 0)
+
+#if UE_VERSION_AT_LEAST(5, 3, 0)
+				SeparateTranslucency = GraphBulderAccessor.FindTexture(TEXT("Translucency.AfterDOF.Color"));
+				if (!SeparateTranslucency)
+#elif UE_VERSION_AT_LEAST(5, 0, 0)
 				if (PassInputs.PostDOFTranslucencyResources.ColorTexture.IsValid())
 				{
 					SeparateTranslucency = PassInputs.PostDOFTranslucencyResources.ColorTexture.Resolve;
 				}
 				else
 #else
-				SeparateTranslucency = GraphBulderAccessor.FindTexture(TEXT("Translucency.AfterDOF.Color"));
-				if (!SeparateTranslucency)
+				FSeparateTranslucencyTexturesAccessor const* Accessor = reinterpret_cast<FSeparateTranslucencyTexturesAccessor const*>(PostInputs.SeparateTranslucencyTextures);
+				if (Accessor && Accessor->ColorTexture.IsValid())
+				{
+					SeparateTranslucency = Accessor->ColorTexture.Resolve;
+				}
+				else
 #endif
 				{
 					SeparateTranslucency = GraphBuilder.RegisterExternalTexture(GSystemTextures.BlackAlphaOneDummy);
@@ -1312,12 +1641,23 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 				}
 
 				FRDGTextureSRVRef CustomStencilRef = nullptr;
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+				// In UE4 plugins we don't prepare for CustomStencil in PostRenderOpaque as it will cause nested AddPass
+				// So we check Cvar here to ensure CustomStencil don't affect Reactive by default like what UE5 plugins do
+				if (CVarFSR3CustomStencilMask.GetValueOnAnyThread() != 0)
+				{
+					FRDGTextureRef CustomDepthSceneTexture = (*PostInputs.SceneTextures)->CustomDepthTexture;
+					FRDGTextureSRVDesc CustomStencilDesc = FRDGTextureSRVDesc::CreateWithPixelFormat(CustomDepthSceneTexture, PF_X24_G8);
+					CustomStencilRef = GraphBuilder.CreateSRV(CustomStencilDesc);
+				}
+#else
 				if (CustomStencilRT)
 				{
 					FRDGTextureRef CustomStencilRefRDG = GraphBuilder.RegisterExternalTexture(CustomStencilRT);
 					FRDGTextureSRVDesc CustomDepthSRV = FRDGTextureSRVDesc::CreateWithPixelFormat(CustomStencilRefRDG, PF_X24_G8);
 					CustomStencilRef = GraphBuilder.CreateSRV(CustomDepthSRV);
 				}
+#endif 
 				if (!CustomStencilRef)
 				{
 					FRDGTextureSRVDesc CustomDepthSRV = FRDGTextureSRVDesc::Create(GraphBuilder.RegisterExternalTexture(GSystemTextures.BlackDummy));
@@ -1343,11 +1683,32 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 				FRDGTextureSRVDesc SceneColorSRV = FRDGTextureSRVDesc::Create(SceneColor);
 				PassParameters->SceneColor = GraphBuilder.CreateSRV(SceneColorSRV);
 
+				EPixelFormat SceneColorFormat = SceneColorDesc.Format;
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
 				//------------------------------------------------------------------------------------------------------
 				// Capturing the scene color pre-alpha requires allocating the texture here, but keeping a reference to it.
 				// The texture will be filled in later in the CopyOpaqueSceneColor function.
 				//------------------------------------------------------------------------------------------------------
-				EPixelFormat SceneColorFormat = SceneColorDesc.Format;
+				if (SceneColorPreAlpha.GetReference())
+				{
+					if (SceneColorPreAlpha->GetSizeX() != InputTextureExtents.X
+						|| SceneColorPreAlpha->GetSizeY() != InputTextureExtents.Y
+						|| SceneColorPreAlpha->GetFormat() != SceneColorFormat
+						|| SceneColorPreAlpha->GetNumMips() != SceneColorDesc.NumMips
+						|| SceneColorPreAlpha->GetNumSamples() != SceneColorDesc.NumSamples)
+					{
+						SceneColorPreAlpha.SafeRelease();
+						SceneColorPreAlphaRT.SafeRelease();
+					}
+				}
+
+				if (SceneColorPreAlpha.GetReference() == nullptr)
+				{
+					FRHIResourceCreateInfo Info(TEXT("FFXFSR3SceneColorPreAlpha"));
+					SceneColorPreAlpha = RHICreateTexture2D(InputTextureExtents.X, InputTextureExtents.Y, SceneColorFormat, SceneColorDesc.NumMips, SceneColorDesc.NumSamples, SceneColorDesc.Flags, Info);
+					SceneColorPreAlphaRT = CreateRenderTarget(SceneColorPreAlpha.GetReference(), TEXT("FFXFSR3SceneColorPreAlpha"));
+				}
+#endif
 
 				if (SceneColorPreAlphaRT)
 				{
@@ -1369,17 +1730,19 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 				}
 
 				PassParameters->InputVelocity = GraphBuilder.CreateSRV(VelocityDesc);
-
+				
 				FRDGTextureRef LumenSpecular;
 				FRDGTextureRef CurrentLumenSpecular = nullptr;
 #if UE_VERSION_AT_LEAST(5, 1, 0) && UE_VERSION_OLDER_THAN(5, 2, 0)
 				CurrentLumenSpecular = GraphBulderAccessor.FindTexture(TEXT("Lumen.Reflections.SpecularIndirect"));
 #endif
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 				if ((CurrentLumenSpecular || LumenReflections.IsValid()) && bHistoryValid && IsUsingLumenReflections(View))
 				{
 					LumenSpecular = CurrentLumenSpecular ? CurrentLumenSpecular : GraphBuilder.RegisterExternalTexture(LumenReflections);
 				}
 				else
+#endif
 				{
 					LumenSpecular = GraphBuilder.RegisterExternalTexture(GSystemTextures.BlackDummy);
 				}
@@ -1486,12 +1849,17 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 		//------------------------------------------------------------------------------------------------------
 		if (!IsValidRef(MotionVectorRT) || MotionVectorRT->GetDesc().Extent.X != InputExtentsQuantized.X || MotionVectorRT->GetDesc().Extent.Y != InputExtentsQuantized.Y)
 		{
+#if UE_VERSION_AT_LEAST(5, 0, 0)
+			ETextureCreateFlags DescFlags = TexCreate_ShaderResource | TexCreate_UAV;
+#else
+			ETextureCreateFlags DescFlags = TexCreate_ShaderResource;
+#endif
 			FPooledRenderTargetDesc Desc(FPooledRenderTargetDesc::Create2DDesc(InputExtentsQuantized,
-				PF_G16R16F,
-				FClearValueBinding::Transparent,
-				TexCreate_ShaderResource | TexCreate_UAV,
-				TexCreate_ShaderResource | TexCreate_UAV | TexCreate_RenderTargetable,
-				false));
+						PF_G16R16F,
+						FClearValueBinding::Transparent,
+						DescFlags,
+						TexCreate_ShaderResource | TexCreate_UAV | TexCreate_RenderTargetable,
+						false));
 			GRenderTargetPool.FindFreeElement(GraphBuilder.RHICmdList, Desc, MotionVectorRT, TEXT("FFXFSR3MotionVectorTexture"));
 		}
 
@@ -1544,12 +1912,12 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 			FRDGTextureRef TempSceneDepth = GraphBuilder.CreateTexture(SplitDepthDesc, TEXT("FFXFSR3SubrectDepth"));
 
 			AddCopyTexturePass(
-				GraphBuilder,
-				SceneDepth,
-				TempSceneDepth,
-				View.ViewRect.Min,
-				FIntPoint::ZeroValue,
-				View.ViewRect.Size());
+					GraphBuilder,
+					SceneDepth,
+					TempSceneDepth,
+					View.ViewRect.Min,
+					FIntPoint::ZeroValue,
+					View.ViewRect.Size());
 
 			SceneDepth = TempSceneDepth;
 		}
@@ -1558,33 +1926,31 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 		// Create Resources
 		//-------------------
 		// Whether alpha channel is supported.
+#if UE_VERSION_AT_LEAST(5, 5, 0)
+
 		static const auto CVarPostPropagateAlpha = IConsoleManager::Get().FindConsoleVariable(TEXT("r.PostProcessing.PropagateAlpha"));
-		//IConsoleVariable* PropagateAlphaCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.PostProcessing.PropagateAlpha"));
-		//static const TConsoleVariableData<bool>* CVarPostPropagateAlpha = PropagateAlphaCVar ? PropagateAlphaCVar->AsVariableBool() : 0;
-
-		//if (PropagateAlphaCVar && PropagateAlphaCVar->GetBool() != true)
-		//{
-		//	const FText NotificationText = LOCTEXT("AlphaSupport",
-		//		"An output requested Alpha Support but the required project setting is not enabled!\n"
-		//		"Go to Project Settings > Rendering > PostProcessing > 'Alpha Output' and enable it.");
-
-		//	FNotificationInfo Info(NotificationText);
-		//	Info.ExpireDuration = 5.0f;	// The message is long, need more time to read it.
-		//	FSlateNotificationManager::Get().AddNotification(Info);
-
-		//	// Also output to logs.
-		//	UE_LOG(LogAvaRundown, Warning, TEXT("%s"), *NotificationText.ToString());
-		//}
-		const bool bSupportsAlpha = CVarPostPropagateAlpha->GetBool();//(CVarPostPropagateAlpha && CVarPostPropagateAlpha.GetBool()->GetValueOnRenderThread() != 0);
+		const bool bSupportsAlpha = (CVarPostPropagateAlpha && CVarPostPropagateAlpha->GetBool());
+#else
+		static const auto CVarPostPropagateAlpha = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.PostProcessing.PropagateAlpha"));
+		const bool bSupportsAlpha = (CVarPostPropagateAlpha && CVarPostPropagateAlpha->GetValueOnRenderThread() != 0);
+#endif
 		EPixelFormat OutputFormat = (bSupportsAlpha || (CVarFSR3HistoryFormat.GetValueOnRenderThread() == 0)) ? PF_FloatRGBA : PF_FloatR11G11B10;
 
 		FRDGTextureDesc OutputColorDesc = FRDGTextureDesc::Create2D(OutputExtentsQuantized, OutputFormat, FClearValueBinding::Black, TexCreate_ShaderResource | TexCreate_UAV | TexCreate_RenderTargetable);
 		FRDGTextureRef OutputTexture = GraphBuilder.CreateTexture(OutputColorDesc, TEXT("FFXFSR3OutputTexture"));
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 		Outputs.FullRes.Texture = OutputTexture;
 		Outputs.FullRes.ViewRect = FIntRect(FIntPoint::ZeroValue, View.GetSecondaryViewRectSize());
+#else
+		*OutSceneColorTexture = OutputTexture;
+		*OutSceneColorViewRect = FIntRect(FIntPoint::ZeroValue, View.GetSecondaryViewRectSize());
 
-#if UE_VERSION_OLDER_THAN(5, 3, 0)
+		*OutSceneColorHalfResTexture = nullptr;
+		*OutSceneColorHalfResViewRect = FIntRect::DivideAndRoundUp(*OutSceneColorViewRect, 2);
+#endif
+
+#if UE_VERSION_AT_LEAST(5, 0, 0) && UE_VERSION_OLDER_THAN(5, 3, 0)
 		Outputs.HalfRes.Texture = nullptr;
 		Outputs.HalfRes.ViewRect = FIntRect::DivideAndRoundUp(Outputs.FullRes.ViewRect, 2);
 #endif
@@ -1654,7 +2020,7 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 					FSR3State = CustomHistory->GetState();
 				}
 			}
-
+			
 			if (!HasValidContext)
 			{
 				FScopeLock Lock(&Mutex);
@@ -1770,7 +2136,11 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 			Fsr3DispatchParams.sharpness = FMath::Clamp(CVarFSR3Sharpness.GetValueOnRenderThread(), 0.0f, 1.0f);
 
 			// Engine parameters:
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 			Fsr3DispatchParams.frameTimeDelta = View.Family->Time.GetDeltaWorldTimeSeconds() * 1000.f;
+#else
+			Fsr3DispatchParams.frameTimeDelta = View.Family->DeltaWorldTime * 1000.f;
+#endif
 			Fsr3DispatchParams.jitterOffset.x = View.TemporalJitterPixels.X;
 			Fsr3DispatchParams.jitterOffset.y = View.TemporalJitterPixels.Y;
 			Fsr3DispatchParams.preExposure = View.PreExposure;
@@ -1789,11 +2159,19 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 			if (bool(ERHIZBuffer::IsInverted))
 			{
 				Fsr3DispatchParams.cameraNear = FLT_MAX;
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 				Fsr3DispatchParams.cameraFar = View.ViewMatrices.ComputeNearPlane();
+#else
+				Fsr3DispatchParams.cameraFar = GNearClippingPlane;
+#endif
 			}
 			else
 			{
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 				Fsr3DispatchParams.cameraNear = View.ViewMatrices.ComputeNearPlane();
+#else
+				Fsr3DispatchParams.cameraNear = GNearClippingPlane;
+#endif
 				Fsr3DispatchParams.cameraFar = FLT_MAX;
 			}
 
@@ -1876,99 +2254,96 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 		else
 		{
 			GraphBuilder.AddPass(RDG_EVENT_NAME("FidelityFX-FSR3"), PassParameters, ERDGPassFlags::Compute | ERDGPassFlags::Raster | ERDGPassFlags::SkipRenderPass, [&View, &PassInputs, CurrentApi, ApiAccess, PassParameters, PrevCustomHistory, Fsr3DispatchParamsPtr, FSR3State, VelocityFactor](FRHICommandListImmediate& RHICmdList)
+			{
+				//----------------------------------------------------------
+				// Organize Inputs (Part 2)
+				//   The remaining inputs FSR3 requires are available now.
+				//----------------------------------------------------------
+				ffxDispatchDescUpscale DispatchParams;
+				FMemory::Memcpy(DispatchParams, *Fsr3DispatchParamsPtr);
+				delete Fsr3DispatchParamsPtr;
+
+				DispatchParams.color = ApiAccess->GetNativeResource(PassParameters->ColorTexture->GetRHI(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+				DispatchParams.depth = ApiAccess->GetNativeResource(PassParameters->DepthTexture->GetRHI(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+				DispatchParams.motionVectors = ApiAccess->GetNativeResource(PassParameters->VelocityTexture->GetRHI(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+
+				if (PassParameters->ExposureTexture)
 				{
-					//----------------------------------------------------------
-					// Organize Inputs (Part 2)
-					//   The remaining inputs FSR3 requires are available now.
-					//----------------------------------------------------------
-					ffxDispatchDescUpscale DispatchParams;
-					FMemory::Memcpy(DispatchParams, *Fsr3DispatchParamsPtr);
-					delete Fsr3DispatchParamsPtr;
+					DispatchParams.exposure = ApiAccess->GetNativeResource(PassParameters->ExposureTexture->GetRHI(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+				}
+				DispatchParams.output = ApiAccess->GetNativeResource(PassParameters->OutputTexture->GetRHI(), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+				if (PassParameters->ReactiveMaskTexture)
+				{
+					DispatchParams.reactive = ApiAccess->GetNativeResource(PassParameters->ReactiveMaskTexture->GetRHI(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+				}
+				if (PassParameters->CompositeMaskTexture)
+				{
+					DispatchParams.transparencyAndComposition = ApiAccess->GetNativeResource(PassParameters->CompositeMaskTexture->GetRHI(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+				}
 
-					DispatchParams.color = ApiAccess->GetNativeResource(PassParameters->ColorTexture->GetRHI(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-					DispatchParams.depth = ApiAccess->GetNativeResource(PassParameters->DepthTexture->GetRHI(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-					DispatchParams.motionVectors = ApiAccess->GetNativeResource(PassParameters->VelocityTexture->GetRHI(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
+				PassParameters->ColorTexture->MarkResourceAsUsed();
+				PassParameters->DepthTexture->MarkResourceAsUsed();
+				PassParameters->VelocityTexture->MarkResourceAsUsed();
+				if (PassParameters->ExposureTexture)
+				{
+					PassParameters->ExposureTexture->MarkResourceAsUsed();
+				}
+				PassParameters->OutputTexture->MarkResourceAsUsed();
+				if (PassParameters->ReactiveMaskTexture)
+				{
+					PassParameters->ReactiveMaskTexture->MarkResourceAsUsed();
+				}
+				if (PassParameters->CompositeMaskTexture)
+				{
+					PassParameters->CompositeMaskTexture->MarkResourceAsUsed();
+				}
 
-					if (PassParameters->ExposureTexture)
+				//---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+				// Push barriers
+				//   Some resources are in the wrong state for FSR3 to execute.  Transition them.  On some platforms, this may involve a bit of tricking the RHI into doing what we want...
+				//---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+				if (ApiAccess)
+				{
+					ApiAccess->ForceUAVTransition(RHICmdList, PassParameters->OutputTexture->GetRHI(), ERHIAccess::UAVMask);
+				}
+
+				auto Texture = PassParameters->OutputTexture->GetRHI();
+				{
+					SCOPED_DRAW_EVENT(RHICmdList, FidelityFXFSR3Dispatch);
+					SCOPED_GPU_STAT(RHICmdList, FidelityFXFSR3Dispatch);
+
+					//-------------------------------------------------------------------------------------
+					// Dispatch FSR3
+					//   Push the FSR3 algorithm directly onto the underlying graphics APIs command list.
+					//-------------------------------------------------------------------------------------
+					RHICmdList.EnqueueLambda([FSR3State, DispatchParams, ApiAccess, Texture, VelocityFactor](FRHICommandListImmediate& cmd) mutable
 					{
-						DispatchParams.exposure = ApiAccess->GetNativeResource(PassParameters->ExposureTexture->GetRHI(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-					}
-					DispatchParams.output = ApiAccess->GetNativeResource(PassParameters->OutputTexture->GetRHI(), FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
-					if (PassParameters->ReactiveMaskTexture)
-					{
-						DispatchParams.reactive = ApiAccess->GetNativeResource(PassParameters->ReactiveMaskTexture->GetRHI(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-					}
-					if (PassParameters->CompositeMaskTexture)
-					{
-						DispatchParams.transparencyAndComposition = ApiAccess->GetNativeResource(PassParameters->CompositeMaskTexture->GetRHI(), FFX_API_RESOURCE_STATE_COMPUTE_READ);
-					}
+						ffxConfigureDescUpscaleKeyValue UpscalerKeyValueConfig;
+						UpscalerKeyValueConfig.header.type = FFX_API_CONFIGURE_DESC_TYPE_UPSCALE_KEYVALUE;
+						UpscalerKeyValueConfig.header.pNext = nullptr;
+						UpscalerKeyValueConfig.key = FFX_API_CONFIGURE_UPSCALE_KEY_FVELOCITYFACTOR;
+						UpscalerKeyValueConfig.u64 = 0;
+						UpscalerKeyValueConfig.ptr = &VelocityFactor;
+						auto Code = ApiAccess->ffxConfigure(&FSR3State->Fsr3, &UpscalerKeyValueConfig.header);
+						check(Code == FFX_API_RETURN_OK);
 
-					PassParameters->ColorTexture->MarkResourceAsUsed();
-					PassParameters->DepthTexture->MarkResourceAsUsed();
-					PassParameters->VelocityTexture->MarkResourceAsUsed();
-					if (PassParameters->ExposureTexture)
-					{
-						PassParameters->ExposureTexture->MarkResourceAsUsed();
-					}
-					PassParameters->OutputTexture->MarkResourceAsUsed();
-					if (PassParameters->ReactiveMaskTexture)
-					{
-						PassParameters->ReactiveMaskTexture->MarkResourceAsUsed();
-					}
-					if (PassParameters->CompositeMaskTexture)
-					{
-						PassParameters->CompositeMaskTexture->MarkResourceAsUsed();
-					}
+						DispatchParams.commandList = ApiAccess->GetNativeCommandBuffer(cmd, Texture);
+						Code = ApiAccess->ffxDispatch(&FSR3State->Fsr3, &DispatchParams.header);
+						check(Code == FFX_API_RETURN_OK);
+					});
+				}
 
-					//---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-					// Push barriers
-					//   Some resources are in the wrong state for FSR3 to execute.  Transition them.  On some platforms, this may involve a bit of tricking the RHI into doing what we want...
-					//---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-					if (ApiAccess)
-					{
-						ApiAccess->ForceUAVTransition(RHICmdList, PassParameters->OutputTexture->GetRHI(), ERHIAccess::UAVMask);
-					}
-
-					auto Texture = PassParameters->OutputTexture->GetRHI();
-					{
-						SCOPED_DRAW_EVENT(RHICmdList, FidelityFXFSR3Dispatch);
-						SCOPED_GPU_STAT(RHICmdList, FidelityFXFSR3Dispatch);
-
-						//-------------------------------------------------------------------------------------
-						// Dispatch FSR3
-						//   Push the FSR3 algorithm directly onto the underlying graphics APIs command list.
-						//-------------------------------------------------------------------------------------
-						ERHIPipeline Pipeline = RHICmdList.GetPipeline();
-
-						if (Pipeline == ERHIPipeline::None)
-						{
-							RHICmdList.SwitchPipeline(ERHIPipeline::Graphics);
-						}
-						RHICmdList.EnqueueLambda([FSR3State, DispatchParams, ApiAccess, Texture, VelocityFactor](FRHICommandListImmediate& cmd) mutable
-							{
-								
-								ffxConfigureDescUpscaleKeyValue UpscalerKeyValueConfig;
-								UpscalerKeyValueConfig.header.type = FFX_API_CONFIGURE_DESC_TYPE_UPSCALE_KEYVALUE;
-								UpscalerKeyValueConfig.header.pNext = nullptr;
-								UpscalerKeyValueConfig.key = FFX_API_CONFIGURE_UPSCALE_KEY_FVELOCITYFACTOR;
-								UpscalerKeyValueConfig.u64 = 0;
-								UpscalerKeyValueConfig.ptr = &VelocityFactor;
-								auto Code = ApiAccess->ffxConfigure(&FSR3State->Fsr3, &UpscalerKeyValueConfig.header);
-								check(Code == FFX_API_RETURN_OK);
-
-								DispatchParams.commandList = ApiAccess->GetNativeCommandBuffer(cmd, Texture);
-								Code = ApiAccess->ffxDispatch(&FSR3State->Fsr3, &DispatchParams.header);
-								check(Code == FFX_API_RETURN_OK);
-							});
-					}
-
-					//-----------------------------------------------------------------------------------------------------------------------------------------------
-					// Flush instructions to the GPU
-					//   The FSR3 Dispatch has tampered with the state of the current command list.  Flush it all the way to the GPU so that Unreal can start anew.
-					//-----------------------------------------------------------------------------------------------------------------------------------------------
-					ApiAccess->Flush(Texture, RHICmdList);
-				});
+				//-----------------------------------------------------------------------------------------------------------------------------------------------
+				// Flush instructions to the GPU
+				//   The FSR3 Dispatch has tampered with the state of the current command list.  Flush it all the way to the GPU so that Unreal can start anew.
+				//-----------------------------------------------------------------------------------------------------------------------------------------------
+				ApiAccess->Flush(Texture, RHICmdList);
+			});
 		}
+
+		FFX_RENDER_TEST_CAPTURE_PASS_BEGIN(TEXT("FFXFSR3TemporalUpscaler"), GraphBuilder, 0.05f);
+			FFX_RENDER_TEST_CAPTURE_PASS_PARAMS(FFXFSR3Pass::FParameters, PassParameters, GraphBuilder, 0.05f);
+		FFX_RENDER_TEST_CAPTURE_PASS_END(GraphBuilder)
 
 		//----------------------------------------------------------------------------------------------------------------------------------
 		// Update History Data (Part 2)
@@ -1982,15 +2357,28 @@ IFFXFSR3TemporalUpscaler::FOutputs FFXFSR3TemporalUpscaler::AddPasses(
 
 		DeferredCleanup(GFrameCounterRenderThread);
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 		return Outputs;
+#endif
 	}
 #if UE_VERSION_OLDER_THAN(5, 3, 0)
 	else
 	{
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 		return GetDefaultTemporalUpscaler()->AddPasses(
 			GraphBuilder,
 			View,
 			PassInputs);
+#else
+		GetDefaultTemporalUpscaler()->AddPasses(
+			GraphBuilder,
+			View,
+			PassInputs,
+			OutSceneColorTexture,
+			OutSceneColorViewRect,
+			OutSceneColorHalfResTexture,
+			OutSceneColorHalfResViewRect);
+#endif
 	}
 #endif
 }
@@ -2063,7 +2451,7 @@ void FFXFSR3TemporalUpscaler::SetSSRShader(FGlobalShaderMap* GlobalMap)
 		}
 
 		if (bShouldBeSwapped != ShaderMapSwapState.bSwapped)
-		{
+		{	
 #if WITH_EDITORONLY_DATA
 			const bool WasFrozen = Section->GetFrozenContentSize() > 0u;
 			FShaderMapContent* Content = (FShaderMapContent*)Section->GetMutableContent();
@@ -2086,8 +2474,8 @@ void FFXFSR3TemporalUpscaler::SetSSRShader(FGlobalShaderMap* GlobalMap)
 				// for this very small and simple shader map, index == permutation id
 				const uint32 CurrentDefaultIndex = DefaultPermutationVector.ToDimensionValueId(), CurrentDenoiseIndex = DenoisePermutationVector.ToDimensionValueId();
 				checkSlow(PublicContent->Shaders[CurrentDefaultIndex].GetChecked() == Content->GetShader(SSRPixelShader, DefaultPermutationVector.ToDimensionValueId())
-					&& PublicContent->Shaders[CurrentDenoiseIndex].GetChecked() == Content->GetShader(SSRPixelShader, DenoisePermutationVector.ToDimensionValueId()));
-
+					   && PublicContent->Shaders[CurrentDenoiseIndex].GetChecked() == Content->GetShader(SSRPixelShader, DenoisePermutationVector.ToDimensionValueId()));
+				
 				FShader* CurrentDefaultShader = PublicContent->Shaders[CurrentDefaultIndex];
 				PublicContent->Shaders[CurrentDefaultIndex] = PublicContent->Shaders[CurrentDenoiseIndex];
 				PublicContent->Shaders[CurrentDenoiseIndex] = CurrentDefaultShader;
@@ -2114,6 +2502,7 @@ void FFXFSR3TemporalUpscaler::SetSSRShader(FGlobalShaderMap* GlobalMap)
 //-------------------------------------------------------------------------------------
 void FFXFSR3TemporalUpscaler::CopyOpaqueSceneColor(FRHICommandListImmediate& RHICmdList, FRHIUniformBuffer* ViewUniformBuffer, const class FShaderParametersMetadata* SceneTexturesUniformBufferStruct, FRHIUniformBuffer* SceneTexturesUniformBuffer)
 {
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 	FTextureRHIRef SceneColor;
 	if (PreAlpha.Target)
 	{
@@ -2128,6 +2517,35 @@ void FFXFSR3TemporalUpscaler::CopyOpaqueSceneColor(FRHICommandListImmediate& RHI
 		Info.Size.Y = FMath::Min(SceneColorPreAlpha->GetSizeY(), (uint32)SceneColor->GetSizeXYZ().Y);
 		RHICmdList.CopyTexture(SceneColor, SceneColorPreAlpha, Info);
 	}
+#else
+	FTextureRHIRef SceneColor;
+	SceneColor = FSceneRenderTargets::Get(RHICmdList).GetSceneColorTexture();
+	if (IsApiSupported() && (CVarEnableFSR3.GetValueOnRenderThread()) && SceneColorPreAlpha.GetReference() && SceneColor.GetReference())
+	{
+		SCOPED_DRAW_EVENTF(RHICmdList, FFXFSR3TemporalUpscaler_CopyOpaqueSceneColor, TEXT("FFXFSR3TemporalUpscaler CopyOpaqueSceneColor"));
+
+#if WITH_EDITOR
+		// PIE keep crashing on exit which seems to be caused by 1x1 SceneColor while tearing down the game
+		int32 QuantizedErrorX = FMath::Abs((int32)SceneColorPreAlpha->GetSizeX() - (int32)SceneColor->GetSizeXYZ().X);
+		int32 QuantizedErrorY = FMath::Abs((int32)SceneColorPreAlpha->GetSizeY() - (int32)SceneColor->GetSizeXYZ().Y);
+		if (FMath::Min(SceneColor->GetSizeXYZ().X, SceneColor->GetSizeXYZ().Y) > 1)
+		{
+#endif // WITH_EDITOR
+			RHICmdList.Transition(FRHITransitionInfo(SceneColor, ERHIAccess::RTV, ERHIAccess::CopySrc));
+			RHICmdList.Transition(FRHITransitionInfo(SceneColorPreAlpha, ERHIAccess::Unknown, ERHIAccess::CopyDest));
+
+			FRHICopyTextureInfo Info;
+			Info.Size.X = FMath::Min(SceneColorPreAlpha->GetSizeX(), (uint32)SceneColor->GetSizeXYZ().X);
+			Info.Size.Y = FMath::Min(SceneColorPreAlpha->GetSizeY(), (uint32)SceneColor->GetSizeXYZ().Y);
+			RHICmdList.CopyTexture(SceneColor, SceneColorPreAlpha, Info);
+
+			RHICmdList.Transition(FRHITransitionInfo(SceneColor, ERHIAccess::CopySrc, ERHIAccess::RTV));
+			RHICmdList.Transition(FRHITransitionInfo(SceneColorPreAlpha, ERHIAccess::CopyDest, ERHIAccess::SRVMask));
+#if WITH_EDITOR
+		}
+#endif // WITH_EDITOR
+	}
+#endif
 }
 
 //-------------------------------------------------------------------------------------
@@ -2135,11 +2553,17 @@ void FFXFSR3TemporalUpscaler::CopyOpaqueSceneColor(FRHICommandListImmediate& RHI
 //-------------------------------------------------------------------------------------
 void FFXFSR3TemporalUpscaler::SetLumenReflections(FSceneView& InView)
 {
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 	if (InView.State)
 	{
 		FReflectionTemporalState& ReflectionTemporalState = ((FSceneViewState*)InView.State)->Lumen.ReflectionState;
-		LumenReflections = ReflectionTemporalState.SpecularAndSecondMomentHistory; //come back to this
+#if UE_VERSION_AT_LEAST(5, 5, 0)
+		LumenReflections = ReflectionTemporalState.SpecularAndSecondMomentHistory;
+#else
+		LumenReflections = ReflectionTemporalState.SpecularIndirectHistoryRT;
+#endif
 	}
+#endif
 }
 
 //-------------------------------------------------------------------------------------
@@ -2343,6 +2767,7 @@ IScreenSpaceDenoiser::FDiffuseIndirectOutputs FFXFSR3TemporalUpscaler::DenoiseRe
 }
 #endif
 
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 FSSDSignalTextures FFXFSR3TemporalUpscaler::DenoiseDiffuseIndirectHarmonic(
 	FRDGBuilder& GraphBuilder,
 	const FViewInfo& View,
@@ -2353,6 +2778,18 @@ FSSDSignalTextures FFXFSR3TemporalUpscaler::DenoiseDiffuseIndirectHarmonic(
 {
 	return WrappedDenoiser->DenoiseDiffuseIndirectHarmonic(GraphBuilder, View, PreviousViewInfos, SceneTextures, Inputs, CommonDiffuseParameters);
 }
+#else
+IScreenSpaceDenoiser::FDiffuseIndirectHarmonic FFXFSR3TemporalUpscaler::DenoiseDiffuseIndirectHarmonic(
+	FRDGBuilder& GraphBuilder,
+	const FViewInfo& View,
+	FPreviousViewInfo* PreviousViewInfos,
+	const FSceneTextureParameters& SceneTextures,
+	const FDiffuseIndirectHarmonic& Inputs,
+	const FAmbientOcclusionRayTracingConfig Config) const
+{
+	return WrappedDenoiser->DenoiseDiffuseIndirectHarmonic(GraphBuilder, View, PreviousViewInfos, SceneTextures, Inputs, Config);
+}
+#endif
 
 bool FFXFSR3TemporalUpscaler::SupportsScreenSpaceDiffuseIndirectDenoiser(EShaderPlatform Platform) const
 {

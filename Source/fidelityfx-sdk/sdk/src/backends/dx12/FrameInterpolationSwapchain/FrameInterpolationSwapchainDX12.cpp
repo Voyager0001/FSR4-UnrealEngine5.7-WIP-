@@ -26,7 +26,11 @@
 
 #include <FidelityFX/host/backends/dx12/ffx_dx12.h>
 #include "FrameInterpolationSwapchainDX12_UiComposition.h"
+#include "FrameInterpolationSwapchainDX12_DebugPacing.h"
 #include "antilag2/ffx_antilag2_dx12.h"
+
+#pragma comment(lib, "winmm.lib")
+#include <timeapi.h>
 
 FfxErrorCode ffxRegisterFrameinterpolationUiResourceDX12(FfxSwapchain gameSwapChain, FfxResource uiResource, uint32_t flags)
         {
@@ -78,6 +82,12 @@ FfxErrorCode ffxConfigureFrameInterpolationSwapchainDX12(FfxSwapchain gameSwapCh
             case FFX_FI_SWAPCHAIN_CONFIGURE_KEY_WAITCALLBACK:
                 framinterpolationSwapchain->setWaitCallback(static_cast<FfxWaitCallbackFunc>(valuePtr));
             break;
+            case FFX_FI_SWAPCHAIN_CONFIGURE_KEY_FRAMEPACINGTUNING:
+                if (valuePtr != nullptr)
+                {
+                    framinterpolationSwapchain->setFramePacingTuning(static_cast<FfxSwapchainFramePacingTuning*>(valuePtr));
+                }
+            break;
         }
         SafeRelease(framinterpolationSwapchain);
 
@@ -117,6 +127,22 @@ FfxErrorCode ffxGetFrameinterpolationCommandlistDX12(FfxSwapchain gameSwapChain,
         return FFX_OK;
     }
 
+    return FFX_ERROR_INVALID_ARGUMENT;
+}
+
+FfxErrorCode ffxFrameInterpolationSwapchainGetGpuMemoryUsageDX12(FfxSwapchain gameSwapChain, FfxEffectMemoryUsage* vramUsage)
+{
+    FFX_RETURN_ON_ERROR(vramUsage, FFX_ERROR_INVALID_POINTER);
+    FfxErrorCode result = FFX_ERROR_INVALID_ARGUMENT;
+    IDXGISwapChain4* swapChain = ffxGetDX12SwapchainPtr(gameSwapChain);
+    
+    FrameInterpolationSwapChainDX12* framinterpolationSwapchain = nullptr;
+    if (SUCCEEDED(swapChain->QueryInterface(IID_PPV_ARGS(&framinterpolationSwapchain))))
+    {
+        framinterpolationSwapchain->GetGpuMemoryUsage(vramUsage);
+        SafeRelease(framinterpolationSwapchain);
+        result = FFX_OK;
+    }
     return FFX_ERROR_INVALID_ARGUMENT;
 }
 
@@ -289,6 +315,32 @@ HRESULT compositeSwapChainFrame(FrameinterpolationPresentInfo* presenter, Pacing
 
     presenter->presentQueue->Wait(presenter->interpolationFence, frameInfo.interpolationCompletedFenceValue);
 
+    if (pacingEntry->drawDebugPacingLines)
+    {
+        auto gpuCommands = presenter->commandPool.get(presenter->presentQueue, L"compositeSwapChainFrame");
+
+        uint32_t        currBackbufferIndex = presenter->swapChain->GetCurrentBackBufferIndex();
+        ID3D12Resource* swapchainBackbuffer = nullptr;
+        presenter->swapChain->GetBuffer(currBackbufferIndex, IID_PPV_ARGS(&swapchainBackbuffer));
+
+        FfxPresentCallbackDescription desc{};
+        desc.commandList            = ffxGetCommandListDX12(gpuCommands->reset());
+        desc.device                 = presenter->device;
+        desc.isInterpolatedFrame    = frameID != PacingData::FrameType::Real;
+        desc.outputSwapChainBuffer  = ffxGetResourceDX12(swapchainBackbuffer, ffxGetResourceDescriptionDX12(swapchainBackbuffer), nullptr, FFX_RESOURCE_STATE_PRESENT);
+        desc.currentBackBuffer      = frameInfo.resource;
+        desc.currentUI              = pacingEntry->uiSurface;
+        desc.usePremulAlpha         = pacingEntry->usePremulAlphaComposite;
+        desc.frameID                = pacingEntry->currentFrameID;
+
+        ffxFrameInterpolationDebugPacing(&desc);
+
+        gpuCommands->execute(true);
+
+        SafeRelease(swapchainBackbuffer);
+    }
+
+
     if (pacingEntry->presentCallback)
     {
         auto gpuCommands = presenter->commandPool.get(presenter->presentQueue, L"compositeSwapChainFrame");
@@ -314,7 +366,8 @@ HRESULT compositeSwapChainFrame(FrameinterpolationPresentInfo* presenter, Pacing
         SafeRelease(swapchainBackbuffer);
     }
 
-    presenter->presentQueue->Signal(presenter->compositionFence, frameInfo.presentIndex);
+    presenter->presentQueue->Signal(presenter->compositionFenceGPU, frameInfo.presentIndex);
+    presenter->compositionFenceCPU->Signal(frameInfo.presentIndex);
 
     return S_OK;
 }
@@ -362,7 +415,16 @@ DWORD WINAPI presenterThread(LPVOID param)
     if (presenter)
     {
         UINT64 numFramesSentForPresentation = 0;
-        int64_t previousPresentQpc          = 0;
+        int64_t qpcFrequency                 = 0;
+
+        LARGE_INTEGER freq;
+        QueryPerformanceFrequency(&freq);
+        qpcFrequency = freq.QuadPart;
+
+        TIMECAPS timerCaps;
+        timerCaps.wPeriodMin = UNKNOWN_TIMER_RESOlUTION; //Default to unknown to prevent sleep without guarantees.
+
+        presenter->previousPresentQpc = 0;
 
         while (!presenter->shutdown)
         {
@@ -397,10 +459,26 @@ DWORD WINAPI presenterThread(LPVOID param)
                                 presenter->presentQueue->Signal(presenter->replacementBufferFence, entry.replacementBufferFenceSignal);
                             }
 
+                            
+                            MMRESULT result = timeGetDevCaps(&timerCaps, sizeof(timerCaps));
+                            if (result != MMSYSERR_NOERROR || !presenter->allowHybridSpin)
+                            {
+                                timerCaps.wPeriodMin = UNKNOWN_TIMER_RESOlUTION;
+                            }
+                            else
+                            {
+                                timerCaps.wPeriodMin = FFX_MAXIMUM(1, timerCaps.wPeriodMin);
+                            }
+
                             // pacing without composition
-                            waitForFenceValue(presenter->compositionFence, frameInfo.presentIndex);
-                            waitForPerformanceCount(previousPresentQpc + frameInfo.presentQpcDelta);
-                            QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER*>(&previousPresentQpc));
+                            waitForFenceValue(presenter->compositionFenceGPU, frameInfo.presentIndex);
+                            uint64_t targetQpc = presenter->previousPresentQpc + frameInfo.presentQpcDelta;
+                            waitForPerformanceCount(targetQpc, qpcFrequency, timerCaps.wPeriodMin, presenter->hybridSpinTime);
+
+                            int64_t currentPresentQPC;
+                            QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER*>(&currentPresentQPC));
+                            presenter->previousPresentQpc = currentPresentQPC;
+
                             presentToSwapChain(presenter, &entry, (PacingData::FrameType)frameType);
                         }
                     }
@@ -434,6 +512,9 @@ DWORD WINAPI interpolationThread(LPVOID param)
             SimpleMovingAverage<10, double> frameTime{};
 
             int64_t previousQpc = 0;
+            int64_t previousDelta = 0;
+            int64_t qpcFrequency;
+            QueryPerformanceFrequency(reinterpret_cast<LARGE_INTEGER*>(&qpcFrequency)); 
 
             while (!presenter->shutdown)
             {
@@ -447,9 +528,36 @@ DWORD WINAPI interpolationThread(LPVOID param)
                     presenter->scheduledInterpolations.invalidate();
 
                     LeaveCriticalSection(&presenter->criticalSectionScheduledFrame);
-
-                    waitForFenceValue(presenter->interpolationFence,
-                        entry.frames[PacingData::FrameType::Interpolated_1].interpolationCompletedFenceValue);
+                    
+                    int64_t preWaitQPC = 0;
+                    QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER*>(&preWaitQPC));
+                    int64_t previousPresentQPC = presenter->previousPresentQpc;
+                    int64_t targetDelta = (previousPresentQPC + previousDelta) - preWaitQPC;
+                    
+                    //Risk of late wake if overthreading. If allowed, use WaitForSingleObject to wait for interpolationFence if the target is more than 2ms later.
+                    if (previousPresentQPC && (targetDelta * 1000000) / qpcFrequency > 2000)  
+                    {
+                        waitForFenceValue(
+                            presenter->interpolationFence, 
+                            entry.frames[PacingData::FrameType::Interpolated_1].interpolationCompletedFenceValue, 
+                            INFINITE,
+                            nullptr,
+                            presenter->allowWaitForSingleObjectOnFence
+                        );
+                        
+                    }
+                    else
+                    {
+                        // spin to wait for interpolationFence if the target is less than 2ms.
+                        waitForFenceValue(
+                            presenter->interpolationFence, 
+                            entry.frames[PacingData::FrameType::Interpolated_1].interpolationCompletedFenceValue, 
+                            INFINITE,
+                            nullptr,
+                            false
+                        );
+                    }
+                    
                     SetEvent(presenter->interpolationEvent);
 
                     int64_t currentQpc = 0;
@@ -459,8 +567,6 @@ DWORD WINAPI interpolationThread(LPVOID param)
                     previousQpc           = currentQpc;
 
                     // reset pacing averaging if delta > 10 fps,
-                    int64_t qpcFrequency;
-                    QueryPerformanceFrequency(reinterpret_cast<LARGE_INTEGER*>(&qpcFrequency));
                     const float fTimeoutInSeconds       = 0.1f;
                     double      deltaQpcResetThreashold = double(qpcFrequency * fTimeoutInSeconds);
                     if ((deltaQpc > deltaQpcResetThreashold) || presenter->resetTimer)
@@ -472,14 +578,14 @@ DWORD WINAPI interpolationThread(LPVOID param)
                         frameTime.update(deltaQpc);
                     }
 
-                    // set presentation time: reduce based on variance and subract 0.5ms as safety margin so we don't lock on a framerate lower than necessary
-                    double  safetyMarginInSec       = 0.0001; // = 0.1ms
-                    int64_t qpcSafetyMargin         = int64_t(qpcFrequency * safetyMarginInSec);
-                    const int64_t conservativeAvg   = int64_t(frameTime.getAverage() * 0.5 - frameTime.getVariance() * 0.1);
+                    // set presentation time: reduce based on variance and subract safety margin so we don't lock on a framerate lower than necessary
+                    int64_t qpcSafetyMargin         = int64_t(qpcFrequency * presenter->safetyMarginInSec);
+                    const int64_t conservativeAvg   = int64_t(frameTime.getAverage() * 0.5 - frameTime.getVariance() * presenter->varianceFactor);
                     const int64_t deltaToUse        = conservativeAvg > qpcSafetyMargin ? (conservativeAvg - qpcSafetyMargin) : 0;
                     entry.frames[PacingData::FrameType::Interpolated_1].presentQpcDelta = deltaToUse;
                     entry.frames[PacingData::FrameType::Real].presentQpcDelta           = deltaToUse;
-
+                    previousDelta                                                       = deltaToUse;
+                    
                     // schedule presents
                     EnterCriticalSection(&presenter->criticalSectionScheduledFrame);
                     presenter->scheduledPresents = entry;
@@ -509,6 +615,7 @@ bool FrameInterpolationSwapChainDX12::verifyBackbufferDuplicateResources()
         if (SUCCEEDED(buffer->GetDevice(IID_PPV_ARGS(&device))))
         {
             auto bufferDesc = buffer->GetDesc();
+            D3D12_CLEAR_VALUE clearValue{ bufferDesc.Format, 0.f, 0.f, 0.f, 1.f };
 
             D3D12_HEAP_PROPERTIES heapProperties{};
             D3D12_HEAP_FLAGS      heapFlags;
@@ -523,18 +630,21 @@ bool FrameInterpolationSwapChainDX12::verifyBackbufferDuplicateResources()
             {
                 if (replacementSwapBuffers[i].resource == nullptr)
                 {
+                    
                     // create game render output resource
                     if (FAILED(device->CreateCommittedResource(&heapProperties,
                                                                 heapFlags,
                                                                 &bufferDesc,
                                                                 D3D12_RESOURCE_STATE_PRESENT,
-                                                                nullptr,
+                                                                &clearValue,
                                                                 IID_PPV_ARGS(&replacementSwapBuffers[i].resource))))
                     {
                         hr |= E_FAIL;
                     }
                     else
                     {
+                        uint64_t resourceSize = GetResourceGpuMemorySize(replacementSwapBuffers[i].resource);
+                        totalUsageInBytes += resourceSize;
                         replacementSwapBuffers[i].resource->SetName(L"AMD FSR Replacement BackBuffer");
                     }
                 }
@@ -547,12 +657,14 @@ bool FrameInterpolationSwapChainDX12::verifyBackbufferDuplicateResources()
                 if (interpolationOutputs[i].resource == nullptr)
                 {
                     if (FAILED(device->CreateCommittedResource(
-                            &heapProperties, heapFlags, &bufferDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&interpolationOutputs[i].resource))))
+                            &heapProperties, heapFlags, &bufferDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, &clearValue, IID_PPV_ARGS(&interpolationOutputs[i].resource))))
                     {
                         hr |= E_FAIL;
                     }
                     else
                     {
+                        uint64_t resourceSize = GetResourceGpuMemorySize(interpolationOutputs[i].resource);
+                        totalUsageInBytes += resourceSize;
                         interpolationOutputs[i].resource->SetName(L"AMD FSR Interpolation Output");
                     }
                 }
@@ -651,8 +763,11 @@ HRESULT FrameInterpolationSwapChainDX12::init(HWND                              
         presentInfo.device->CreateFence(framesSentForPresentation, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&presentInfo.replacementBufferFence));
         presentInfo.replacementBufferFence->SetName(L"AMD FSR ReplacementBufferFence");
 
-        presentInfo.device->CreateFence(framesSentForPresentation, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&presentInfo.compositionFence));
-        presentInfo.compositionFence->SetName(L"AMD FSR CompositionFence");
+        presentInfo.device->CreateFence(framesSentForPresentation, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&presentInfo.compositionFenceGPU));
+        presentInfo.compositionFenceGPU->SetName(L"AMD FSR CompositionFence GPU");
+
+        presentInfo.device->CreateFence(framesSentForPresentation, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&presentInfo.compositionFenceCPU));
+        presentInfo.compositionFenceCPU->SetName(L"AMD FSR CompositionFence CPU");
 
         replacementFrameLatencyWaitableObjectHandle = CreateEvent(0, FALSE, TRUE, nullptr);
 
@@ -720,11 +835,13 @@ HRESULT FrameInterpolationSwapChainDX12::shutdown()
     //m_pDevice will be nullptr already shutdown
     if (presentInfo.device)
     {
-        releaseUiBlitGpuResources();
-
         destroyReplacementResources();
-
+        
+        EnterCriticalSection(&criticalSection);
         killPresenterThread();
+        releaseUiBlitGpuResources();
+        LeaveCriticalSection(&criticalSection);
+
         SafeCloseHandle(presentInfo.presentEvent);
         SafeCloseHandle(presentInfo.interpolationEvent);
         SafeCloseHandle(presentInfo.pacerEvent);
@@ -735,7 +852,7 @@ HRESULT FrameInterpolationSwapChainDX12::shutdown()
             if (presentInfo.interpolationFence)
             {
                 presentInfo.interpolationQueue->Signal(presentInfo.interpolationFence, ++interpolationFenceValue);
-                waitForFenceValue(presentInfo.interpolationFence, interpolationFenceValue, INFINITE, waitCallback);
+                waitForFenceValue(presentInfo.interpolationFence, interpolationFenceValue, INFINITE, presentInfo.waitCallback, presentInfo.interpolationFence);
             }
         }
         
@@ -745,13 +862,14 @@ HRESULT FrameInterpolationSwapChainDX12::shutdown()
         SafeRelease(presentInfo.interpolationFence);
         SafeRelease(presentInfo.presentFence);
         SafeRelease(presentInfo.replacementBufferFence);
-        SafeRelease(presentInfo.compositionFence);
+        SafeRelease(presentInfo.compositionFenceGPU);
+        SafeRelease(presentInfo.compositionFenceCPU);
 
         std::ignore = SafeRelease(presentInfo.swapChain);
 
         if (presentInfo.gameFence)
         {
-            waitForFenceValue(presentInfo.gameFence, gameFenceValue, INFINITE, waitCallback);
+            waitForFenceValue(presentInfo.gameFence, gameFenceValue, INFINITE, presentInfo.waitCallback);
         }
         SafeRelease(presentInfo.gameFence);
 
@@ -837,9 +955,10 @@ void FrameInterpolationSwapChainDX12::setFrameGenerationConfig(FfxFrameGeneratio
         if ( presentInfo.interpolationQueue != inputInterpolationQueue 
            || interpolationEnabled != config->frameGenerationEnabled 
            || presentCallback != inputPresentCallback
-           || presentCallbackContext != inputPresentCallbackCtx
+           || presentCallbackContext != inputPresentCallbackCtx 
            || frameGenerationCallback != config->frameGenerationCallback
-           || frameGenerationCallbackContext != config->frameGenerationCallbackContext)
+           || frameGenerationCallbackContext != config->frameGenerationCallbackContext
+           || drawDebugPacingLines != config->drawDebugPacingLines)
         {
             applyChangesNow = true;
         }
@@ -852,6 +971,7 @@ void FrameInterpolationSwapChainDX12::setFrameGenerationConfig(FfxFrameGeneratio
         currentFrameID          = config->frameID;
         presentInterpolatedOnly = config->onlyPresentInterpolated;
         interpolationRect       = config->interpolationRect;
+        drawDebugPacingLines    = config->drawDebugPacingLines;
 
         if (presentInfo.interpolationQueue != inputInterpolationQueue)
         {
@@ -917,15 +1037,26 @@ bool FrameInterpolationSwapChainDX12::destroyReplacementResources()
     {
         for (size_t i = 0; i < _countof(replacementSwapBuffers); i++)
         {
+            uint64_t resourceSize = GetResourceGpuMemorySize(replacementSwapBuffers[i].resource);
+            totalUsageInBytes -= resourceSize;
             replacementSwapBuffers[i].destroy();
         }
-        SafeRelease(realBackBuffer0);
 
+        SafeRelease(realBackBuffer0);
+        
         for (size_t i = 0; i < _countof(interpolationOutputs); i++)
         {
+            uint64_t resourceSize = GetResourceGpuMemorySize(interpolationOutputs[i].resource);
+            totalUsageInBytes -= resourceSize;
             interpolationOutputs[i].destroy();
         }
 
+        if (uiReplacementBuffer.resource !=nullptr)
+        {
+            uint64_t resourceSize = GetResourceGpuMemorySize(uiReplacementBuffer.resource);
+            totalUsageInBytes -= resourceSize;
+        }
+        
         uiReplacementBuffer.destroy();
     }
 
@@ -958,9 +1089,14 @@ bool FrameInterpolationSwapChainDX12::destroyReplacementResources()
         presentInfo.replacementBufferFence->Signal(framesSentForPresentation);
     }
 
-    if (presentInfo.compositionFence)
+    if (presentInfo.compositionFenceGPU)
     {
-        presentInfo.compositionFence->Signal(framesSentForPresentation);
+        presentInfo.compositionFenceGPU->Signal(framesSentForPresentation);
+    }
+
+    if (presentInfo.compositionFenceCPU)
+    {
+        presentInfo.compositionFenceCPU->Signal(framesSentForPresentation);
     }
 
     frameInterpolationResetCondition = true;
@@ -980,9 +1116,9 @@ bool FrameInterpolationSwapChainDX12::destroyReplacementResources()
 bool FrameInterpolationSwapChainDX12::waitForPresents()
 {
     // wait for interpolation to finish
-    waitForFenceValue(presentInfo.gameFence, gameFenceValue, INFINITE, waitCallback);
-    waitForFenceValue(presentInfo.interpolationFence, interpolationFenceValue, INFINITE, waitCallback);
-    waitForFenceValue(presentInfo.presentFence, framesSentForPresentation, INFINITE, waitCallback);
+    waitForFenceValue(presentInfo.gameFence, gameFenceValue, INFINITE, presentInfo.waitCallback);
+    waitForFenceValue(presentInfo.interpolationFence, interpolationFenceValue, INFINITE, presentInfo.waitCallback);
+    waitForFenceValue(presentInfo.presentFence, framesSentForPresentation, INFINITE, presentInfo.waitCallback);
 
     return true;
 }
@@ -1086,7 +1222,22 @@ void FrameInterpolationSwapChainDX12::registerUiResource(FfxResource uiResource,
 
 void FrameInterpolationSwapChainDX12::setWaitCallback(FfxWaitCallbackFunc waitCallbackFunc)
 {
-    waitCallback = waitCallbackFunc;
+    presentInfo.waitCallback = waitCallbackFunc;
+}
+
+void FrameInterpolationSwapChainDX12::setFramePacingTuning(const FfxSwapchainFramePacingTuning* framePacingTuning)
+{
+    presentInfo.safetyMarginInSec = static_cast<double> (framePacingTuning->safetyMarginInMs) / 1000.0;
+    presentInfo.varianceFactor = static_cast<double> (framePacingTuning->varianceFactor);
+    presentInfo.allowHybridSpin = framePacingTuning->allowHybridSpin;
+    presentInfo.hybridSpinTime = framePacingTuning->hybridSpinTime;
+    presentInfo.allowWaitForSingleObjectOnFence = framePacingTuning->allowWaitForSingleObjectOnFence;
+}
+
+void FrameInterpolationSwapChainDX12::GetGpuMemoryUsage(FfxEffectMemoryUsage* vramUsage)
+{
+    vramUsage->totalUsageInBytes = totalUsageInBytes;
+    vramUsage->aliasableUsageInBytes = aliasableUsageInBytes;
 }
 
 void FrameInterpolationSwapChainDX12::presentPassthrough(UINT SyncInterval, UINT Flags)
@@ -1137,7 +1288,8 @@ void FrameInterpolationSwapChainDX12::presentPassthrough(UINT SyncInterval, UINT
     passthroughList->execute(true);
 
     presentInfo.presentQueue->Signal(presentInfo.replacementBufferFence, ++framesSentForPresentation);
-    presentInfo.presentQueue->Signal(presentInfo.compositionFence, framesSentForPresentation);
+    presentInfo.presentQueue->Signal(presentInfo.compositionFenceGPU, framesSentForPresentation);
+    presentInfo.compositionFenceCPU->Signal(framesSentForPresentation);
 
     setSwapChainBufferResourceInfo(presentInfo.swapChain, false);
     presentInfo.swapChain->Present(SyncInterval, Flags);
@@ -1183,7 +1335,8 @@ void FrameInterpolationSwapChainDX12::presentWithUiComposition(UINT SyncInterval
     uiCompositionList->execute(true);
 
     presentInfo.presentQueue->Signal(presentInfo.replacementBufferFence, ++framesSentForPresentation);
-    presentInfo.presentQueue->Signal(presentInfo.compositionFence, framesSentForPresentation);
+    presentInfo.presentQueue->Signal(presentInfo.compositionFenceGPU, framesSentForPresentation);
+    presentInfo.compositionFenceCPU->Signal(framesSentForPresentation);
 
     setSwapChainBufferResourceInfo(presentInfo.swapChain, false);
     presentInfo.swapChain->Present(SyncInterval, Flags);
@@ -1207,7 +1360,7 @@ void FrameInterpolationSwapChainDX12::dispatchInterpolationCommands(FfxResource*
     *pRealFrame = backbuffer;
 
     // interpolation queue must wait for output resource to become available
-    presentInfo.interpolationQueue->Wait(presentInfo.compositionFence, interpolationOutputs[interpolationBufferIndex].availabilityFenceValue);
+    presentInfo.interpolationQueue->Wait(presentInfo.compositionFenceGPU, interpolationOutputs[interpolationBufferIndex].availabilityFenceValue);
 
     auto pRegisteredCommandList = registeredInterpolationCommandLists[currentBackBufferIndex];
     if (pRegisteredCommandList != nullptr)
@@ -1267,6 +1420,8 @@ void FrameInterpolationSwapChainDX12::presentInterpolated(UINT SyncInterval, UIN
     PacingData entry{};
     entry.presentCallback                   = presentCallback;
     entry.presentCallbackContext            = presentCallbackContext;
+    entry.drawDebugPacingLines              = drawDebugPacingLines;
+
     if (presentInfo.uiCompositionFlags & FFX_UI_COMPOSITION_FLAG_ENABLE_INTERNAL_UI_DOUBLE_BUFFERING)
     {
         FfxResourceDescription uiBufferDesc = ffxGetResourceDescriptionDX12(uiReplacementBuffer.resource);
@@ -1336,7 +1491,9 @@ bool FrameInterpolationSwapChainDX12::verifyUiDuplicateResource()
     {
         if (nullptr != uiReplacementBuffer.resource)
         {
-            waitForFenceValue(presentInfo.compositionFence, framesSentForPresentation, INFINITE, waitCallback);
+            uint64_t resourceSize = GetResourceGpuMemorySize(uiReplacementBuffer.resource);
+            totalUsageInBytes -= resourceSize;
+            waitForFenceValue(presentInfo.compositionFenceGPU, framesSentForPresentation, INFINITE, presentInfo.waitCallback);
             SafeRelease(uiReplacementBuffer.resource);
             uiReplacementBuffer = {};
         }
@@ -1351,7 +1508,7 @@ bool FrameInterpolationSwapChainDX12::verifyUiDuplicateResource()
 
             if (uiResourceDesc.Format != internalDesc.Format || uiResourceDesc.Width != internalDesc.Width || uiResourceDesc.Height != internalDesc.Height)
             {
-                waitForFenceValue(presentInfo.compositionFence, framesSentForPresentation, INFINITE, waitCallback);
+                waitForFenceValue(presentInfo.compositionFenceGPU, framesSentForPresentation, INFINITE, presentInfo.waitCallback);
                 SafeRelease(uiReplacementBuffer.resource);
             }
         }
@@ -1360,6 +1517,7 @@ bool FrameInterpolationSwapChainDX12::verifyUiDuplicateResource()
         {
             if (SUCCEEDED(uiResource->GetDevice(IID_PPV_ARGS(&device))))
             {
+
                 D3D12_HEAP_PROPERTIES heapProperties{};
                 D3D12_HEAP_FLAGS      heapFlags;
                 uiResource->GetHeapProperties(&heapProperties, &heapFlags);
@@ -1381,6 +1539,8 @@ bool FrameInterpolationSwapChainDX12::verifyUiDuplicateResource()
                 }
                 else
                 {
+                    uint64_t resourceSize = GetResourceGpuMemorySize(uiReplacementBuffer.resource);
+                    totalUsageInBytes += resourceSize;
                     uiReplacementBuffer.resource->SetName(L"AMD FSR Internal Ui Resource");
                 }
 
@@ -1434,6 +1594,8 @@ void FrameInterpolationSwapChainDX12::copyUiResource()
     dx12List->ResourceBarrier(_countof(barriers), barriers);
 
     copyList->execute(true);
+
+    presentInfo.currentUiSurface.resource = nullptr;
 }
 
     // IDXGISwapChain1
@@ -1457,7 +1619,9 @@ HRESULT STDMETHODCALLTYPE FrameInterpolationSwapChainDX12::Present(UINT SyncInte
     const bool fgCommandListConfigured = registeredInterpolationCommandLists[currentBackBufferIndex] != nullptr;
     const bool runInterpolation        = interpolationEnabled && (fgCallbackConfigured || fgCommandListConfigured);
 
-    presentInfo.gameQueue->Wait(presentInfo.compositionFence, previousFramesSentForPresentation);
+    // Ensure presenter thread has signaled before applying any wait to the game queue
+    waitForFenceValue(presentInfo.compositionFenceCPU, previousFramesSentForPresentation);
+    presentInfo.gameQueue->Wait(presentInfo.compositionFenceGPU, previousFramesSentForPresentation);
 
     // Verify integrity of internal Ui resource
     if (verifyUiDuplicateResource())
@@ -1472,9 +1636,6 @@ HRESULT STDMETHODCALLTYPE FrameInterpolationSwapChainDX12::Present(UINT SyncInte
     if (runInterpolation)
     {
         WaitForSingleObject(presentInfo.interpolationEvent, INFINITE);
-
-        // NOTE: why signal here when it's also signaled in presentInterpolated?
-        presentInfo.gameQueue->Signal(presentInfo.gameFence, ++gameFenceValue);
 
         presentInterpolated(SyncInterval, Flags);
     }
@@ -1510,7 +1671,7 @@ HRESULT STDMETHODCALLTYPE FrameInterpolationSwapChainDX12::Present(UINT SyncInte
 
     LeaveCriticalSection(&criticalSection);
 
-    waitForFenceValue(presentInfo.replacementBufferFence, replacementSwapBuffers[replacementSwapBufferIndex].availabilityFenceValue, INFINITE, waitCallback);
+    waitForFenceValue(presentInfo.replacementBufferFence, replacementSwapBuffers[replacementSwapBufferIndex].availabilityFenceValue, INFINITE, presentInfo.waitCallback);
 
     return S_OK;
 }

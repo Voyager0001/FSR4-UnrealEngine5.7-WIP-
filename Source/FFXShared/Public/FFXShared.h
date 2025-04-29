@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -60,4 +60,33 @@
 	#include "Windows/HideWindowsPlatformTypes.h"
 #else
 	#undef FFX_GCC
+#endif
+
+#if defined(FFX_RENDER_TESTS)
+	#include "IFFXRenderTest.h"
+#else
+	#ifndef FFX_RENDER_TEST_CAPTURE_PASS_BEGIN
+		#define FFX_RENDER_TEST_CAPTURE_PASS_BEGIN(Name, GraphBuilder, MinDiff)  
+	#endif
+	#ifndef FFX_RENDER_TEST_CAPTURE_PASS_ADD
+		#define FFX_RENDER_TEST_CAPTURE_PASS_ADD(TextureName, GraphBuilder, MinDiff) 
+	#endif
+	#ifndef FFX_RENDER_TEST_CAPTURE_PASS_PARAM
+		#define FFX_RENDER_TEST_CAPTURE_PASS_PARAM(TextureName, Texture, GraphBuilder, MinDiff) 
+	#endif
+	#ifndef FFX_RENDER_TEST_CAPTURE_PASS_PARAMS
+		#define FFX_RENDER_TEST_CAPTURE_PASS_PARAMS(TypeName, Parameters, GraphBuilder, MinDiff) 
+	#endif
+	#ifndef FFX_RENDER_TEST_CAPTURE_PASS_END
+		#define FFX_RENDER_TEST_CAPTURE_PASS_END(GraphBuilder) 
+	#endif
+	#ifndef FFX_RENDER_TEST_CAPTURE_PASS_BEGIN_DX12
+		#define FFX_RENDER_TEST_CAPTURE_PASS_BEGIN_DX12(Name)	
+	#endif
+	#ifndef FFX_RENDER_TEST_CAPTURE_PASS_ADD_DX12
+		#define FFX_RENDER_TEST_CAPTURE_PASS_ADD_DX12(Dev, List, Tex, State, Frames, Name)	
+	#endif
+	#ifndef FFX_RENDER_TEST_CAPTURE_PASS_END_DX12
+		#define FFX_RENDER_TEST_CAPTURE_PASS_END_DX12	
+	#endif
 #endif

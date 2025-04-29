@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -95,12 +95,7 @@ FFXRHIBackendRegisterEffect<FFX_EFFECT_FRAMEINTERPOLATION, GetFIPass> FFXRHIBack
 
 bool FFXFIGlobalShader::ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 {
-#if UE_VERSION_AT_LEAST(5, 1, 0)
-	bool const bWaveOps = FDataDrivenShaderPlatformInfo::GetSupportsWaveOperations(Parameters.Platform) == ERHIFeatureSupport::RuntimeGuaranteed;
-#else
-	bool const bWaveOps = RHISupportsWaveOperations(Parameters.Platform);
-#endif
-	return bWaveOps && FFXGlobalShader::ShouldCompilePermutation(Parameters);
+	return FFXGlobalShader::ShouldCompilePermutation(Parameters);
 }
 
 void FFXFIGlobalShader::ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
@@ -211,8 +206,15 @@ void FFXFIGlobalShader::BindParameters(FRDGBuilder& GraphBuilder, FFXBackendStat
 			case FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_PRESENT_BACKBUFFER:
 				Parameters->r_present_backbuffer = Context->GetRDGTexture(GraphBuilder, job->computeJobDescriptor.srvTextures[i].resource.internalIndex);
 				break;
+			case FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_DISTORTION_FIELD:
+				Parameters->r_input_distortion_field = Context->GetRDGTexture(GraphBuilder, job->computeJobDescriptor.srvTextures[i].resource.internalIndex);
+				break;
 			case FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_COUNTERS:
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 				Parameters->r_counters = GraphBuilder.CreateSRV(FRDGBufferSRVDesc(Context->GetRDGBuffer(GraphBuilder, job->computeJobDescriptor.srvTextures[i].resource.internalIndex)));
+#else
+				Parameters->r_counters = GraphBuilder.CreateSRV(FRDGBufferSRVDesc(Context->GetRDGBuffer(GraphBuilder, job->computeJobDescriptor.srvTextures[i].resource.internalIndex), PF_R32_UINT)); // EPixelFormat is needed because FRDGBufferUAVDesc 1 arg verion ctor asserts Indirect Arg.
+#endif
 				break;
 			default:
 			{
@@ -256,7 +258,11 @@ void FFXFIGlobalShader::BindParameters(FRDGBuilder& GraphBuilder, FFXBackendStat
 				Parameters->rw_optical_flow_motion_vector_field_y = GraphBuilder.CreateUAV(FRDGTextureUAVDesc(Context->GetRDGTexture(GraphBuilder, job->computeJobDescriptor.uavTextures[i].resource.internalIndex), job->computeJobDescriptor.uavTextures[i].mip));
 				break;
 			case FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_COUNTERS:
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 				Parameters->rw_counters = GraphBuilder.CreateUAV(FRDGBufferUAVDesc(Context->GetRDGBuffer(GraphBuilder, job->computeJobDescriptor.uavTextures[i].resource.internalIndex)));
+#else
+				Parameters->rw_counters = GraphBuilder.CreateUAV(FRDGBufferUAVDesc(Context->GetRDGBuffer(GraphBuilder, job->computeJobDescriptor.uavTextures[i].resource.internalIndex), PF_R32_UINT)); // EPixelFormat is needed because FRDGBufferUAVDesc 1 arg verion ctor asserts Indirect Arg.
+#endif
 				break;
 			case FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_INPAINTING_MASK:
 				Parameters->rw_inpainting_mask = GraphBuilder.CreateUAV(FRDGTextureUAVDesc(Context->GetRDGTexture(GraphBuilder, job->computeJobDescriptor.uavTextures[i].resource.internalIndex), job->computeJobDescriptor.uavTextures[i].mip));

@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -40,9 +40,15 @@ public:
 	void SetupView(FSceneViewFamily& InViewFamily, FSceneView& InView) override {}
 
 	void BeginRenderViewFamily(FSceneViewFamily& InViewFamily) override;
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 	void PreRenderViewFamily_RenderThread(FRenderGraphType& GraphBuilder, FSceneViewFamily& InViewFamily) override;
 	void PreRenderView_RenderThread(FRenderGraphType& GraphBuilder, FSceneView& InView) override;
 	void PostRenderViewFamily_RenderThread(FRenderGraphType& GraphBuilder, FSceneViewFamily& InViewFamily) override;
+#else
+	void PreRenderViewFamily_RenderThread(FRHICommandListImmediate& RHICmdList, FSceneViewFamily& InViewFamily) override;
+	void PreRenderView_RenderThread(FRHICommandListImmediate& RHICmdList, FSceneView& InView) override;
+	void PostRenderViewFamily_RenderThread(FRHICommandListImmediate& RHICmdList, FSceneViewFamily& InViewFamily) override;
+#endif
 	void PrePostProcessPass_RenderThread(FRDGBuilder& GraphBuilder, const FSceneView& View, const FPostProcessingInputs& Inputs) override;
 
 private:
@@ -56,4 +62,5 @@ private:
 	int32 BasePassForceOutputsVelocity;
 	int32 SeparateTranslucency;
 	int32 SSRExperimentalDenoiser;
+	bool bFSR3Supported;
 };

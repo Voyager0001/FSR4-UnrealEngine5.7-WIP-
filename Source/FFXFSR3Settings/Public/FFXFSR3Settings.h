@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -145,6 +145,7 @@ extern FFXFSR3SETTINGS_API TAutoConsoleVariable<int32> CVarFFXFICaptureDebugUI;
 extern FFXFSR3SETTINGS_API TAutoConsoleVariable<int32> CVarFFXFIUpdateGlobalFrameTime;
 extern FFXFSR3SETTINGS_API TAutoConsoleVariable<int32> CVarFFXFIModifySlateDeltaTime;
 extern FFXFSR3SETTINGS_API TAutoConsoleVariable<int32> CVarFFXFIUIMode;
+extern FFXFSR3SETTINGS_API TAutoConsoleVariable<int32> CVarFFXFIUseDistortionTexture;
 #if (UE_BUILD_DEBUG || UE_BUILD_DEVELOPMENT || UE_BUILD_TEST)
 extern FFXFSR3SETTINGS_API TAutoConsoleVariable<int32> CVarFFXFIShowDebugTearLines;
 extern FFXFSR3SETTINGS_API TAutoConsoleVariable<int32> CVarFFXFIShowDebugView;
@@ -213,6 +214,9 @@ public:
 
 	UPROPERTY(Config, EditAnywhere, Category = "Frame Generation Settings", meta = (ConsoleVariable = "r.FidelityFX.FI.UIMode", DisplayName = "UI Mode", ToolTip = "The method to render the UI when using Frame Generation.\nSlate Redraw (0): will cause Slate to render the UI on to both the real & generation images each frame, this is higher quality but requires UI elements to be able to render multiple times per game frame.\nUI Extraction (1): will compare the pre & post UI frame to extract the UI and copy it on to the generated frame, this might result in lower quality for translucent UI elements but doesn't require re-rendering UI elements."))
 		EFFXFSR3FrameGenUIMode UIMode;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Frame Generation Settings", meta = (ConsoleVariable = "r.FidelityFX.FI.UseDistortionTexture", DisplayName = "Use Distortion Texture", ToolTip = "Set to 1 to bind the UE distortion texture to the Frame Interpolation context to better interpolate distortion, set to 0 to ignore distortion."))
+		bool bUseDistortionTexture;
 
 	UPROPERTY(Config, EditAnywhere, Category = "Frame Generation Settings", meta = (ConsoleVariable = "r.FidelityFX.FI.AllowAsyncWorkloads", DisplayName = "D3D12 Async. Interpolation", ToolTip = "True to use async. execution of Frame Interpolation, false to run Frame Interpolation synchronously with the game."))
 		bool bD3D12AsyncInterpolation;

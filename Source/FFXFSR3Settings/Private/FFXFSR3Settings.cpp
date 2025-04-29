@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -28,7 +28,9 @@
 
 #include "CoreMinimal.h"
 #include "Interfaces/IPluginManager.h"
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 #include "Misc/ConfigCacheIni.h"
+#endif
 #if UE_VERSION_AT_LEAST(5, 1, 0)
 #include "Misc/ConfigUtilities.h"
 #endif
@@ -344,6 +346,12 @@ TAutoConsoleVariable<int32> CVarFFXFIUIMode(
 	TEXT("- Slate Redraw (0): will cause Slate to render the UI on to both the real & generated images each frame, this is higher quality but requires UI elements to be able to render multiple times per game frame.\n")
 	TEXT("- UI Extraction (1): will compare the pre- & post- UI frame to extract the UI and copy it on to the generated frame, this might result in lower quality for translucent UI elements but doesn't require re-rendering UI elements."),
 	ECVF_ReadOnly);
+
+TAutoConsoleVariable<int32> CVarFFXFIUseDistortionTexture(
+	TEXT("r.FidelityFX.FI.UseDistortionTexture"),
+	0,
+	TEXT("Set to 1 to bind the UE distortion texture to the Frame Interpolation context to better interpolate distortion, set to 0 to ignore distortion (Default: 0).\n"),
+	ECVF_RenderThreadSafe);
 
 #if (UE_BUILD_DEBUG || UE_BUILD_DEVELOPMENT || UE_BUILD_TEST)
 TAutoConsoleVariable<int32> CVarFFXFIShowDebugTearLines(

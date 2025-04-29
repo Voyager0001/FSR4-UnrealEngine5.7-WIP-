@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -53,7 +53,7 @@ public:
 
 	static uint32 GetNumBoundSRVs()
 	{
-		return 6;
+		return 7;
 	}
 
 	static uint32 GetNumBoundUAVs()
@@ -75,6 +75,7 @@ public:
 			FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_DILATED_DEPTH,
 			FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_RECONSTRUCTED_DEPTH_INTERPOLATED_FRAME,
 			FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_INPAINTING_PYRAMID,
+			FFX_FRAMEINTERPOLATION_RESOURCE_IDENTIFIER_DISTORTION_FIELD,
 		};
 		return SRVs;
 	}
@@ -88,6 +89,7 @@ public:
 			L"r_dilated_depth",
 			L"r_reconstructed_depth_interpolated_frame",
 			L"r_inpainting_pyramid",
+			L"r_input_distortion_field",
 		};
 		return SRVs;
 	}

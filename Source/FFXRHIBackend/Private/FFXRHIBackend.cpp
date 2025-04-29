@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -26,8 +26,12 @@
 #include "RenderGraphUtils.h"
 #include "Engine/RendererSettings.h"
 #include "Containers/ResourceArray.h"
+#include "Containers/DynamicRHIResourceArray.h"
 #include "Engine/GameViewportClient.h"
 #include "UnrealClient.h"
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+#include "RenderGraphBuilder.h"
+#endif
 
 #include "FFXShared.h"
 #include "FFXFSR3.h"
@@ -47,6 +51,11 @@
 THIRD_PARTY_INCLUDES_START
 
 #include "ffx_provider.h"
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+#undef TRY
+#define TRY(_expr) \
+	{ ffxReturnCode_t _rc = (_expr); if (_rc != FFX_API_RETURN_OK) return _rc; }
+#endif
 #include "ffx_provider_framegeneration.h"
 #include "ffx_provider_fsr3upscale.h"
 
@@ -165,7 +174,10 @@ static FfxErrorCode CreateResource_UE(FfxInterface* backendInterface, const FfxC
 {
 	FfxErrorCode Result = FFX_OK;
 	FFXBackendState* Context = (FFXBackendState*)backendInterface->scratchBuffer;
-	
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+	FRDGBuilder* GraphBuilder = FFXRHIBackend::GetGraphBuilder();
+#endif
+
 	if (Context)
 	{
 		ETextureCreateFlags Flags = TexCreate_None;
@@ -173,11 +185,10 @@ static FfxErrorCode CreateResource_UE(FfxInterface* backendInterface, const FfxC
 		Flags |= (desc->resourceDescription.usage & FFX_RESOURCE_USAGE_RENDERTARGET) ? TexCreate_RenderTargetable | TexCreate_UAV | TexCreate_ShaderResource : TexCreate_None;
 		Flags |= (desc->resourceDescription.usage & FFX_RESOURCE_USAGE_UAV) ? TexCreate_UAV | TexCreate_ShaderResource : TexCreate_None;
 		Flags |= desc->resourceDescription.format == FFX_SURFACE_FORMAT_R8G8B8A8_SRGB ? TexCreate_SRGB : TexCreate_None;
-				
-		FRHIResourceCreateInfo Info(WCHAR_TO_TCHAR(desc->name));
 
 		size_t Size = desc->resourceDescription.width;
-		FFXTextureBulkData BulkData(desc->initData.buffer, desc->initData.size);
+		void* InitData = desc->initData.buffer;
+		size_t InitDataSize = desc->initData.size;
 		if (desc->resourceDescription.format == FFX_SURFACE_FORMAT_R16_SNORM && desc->initData.buffer)
 		{
 			int16* Data = (int16*)FMemory::Malloc(desc->initData.size * 4);
@@ -189,8 +200,8 @@ static FfxErrorCode CreateResource_UE(FfxInterface* backendInterface, const FfxC
 				Data[i * 4 + 3] = 0;
 			}
 
-			BulkData.Data = Data;
-			BulkData.DataSize = desc->initData.size * 4;
+			InitData = Data;
+			InitDataSize = desc->initData.size * 4;
 			Size = desc->resourceDescription.width * 4;
 		}
 		else if (desc->resourceDescription.format == FFX_SURFACE_FORMAT_R16G16_SINT && desc->initData.buffer)
@@ -204,43 +215,51 @@ static FfxErrorCode CreateResource_UE(FfxInterface* backendInterface, const FfxC
 				Data[i * 2 + 3] = 0;
 			}
 
-			BulkData.Data = Data;
-			BulkData.DataSize = desc->initData.size * 2;
+			InitData = Data;
+			InitDataSize = desc->initData.size * 2;
 			Size = desc->resourceDescription.width * 2;
 		}
 
 		auto Type = desc->resourceDescription.type;
 
-		Info.BulkData = desc->initData.buffer && desc->initData.size ? &BulkData : nullptr;
-
+		bool bInitData = InitData && InitDataSize;
+	
 		switch (Type)
 		{
 			case FFX_RESOURCE_TYPE_BUFFER:
 			{
+#if UE_VERSION_AT_LEAST(5, 0, 0)
+				FRHIResourceCreateInfo Info(WCHAR_TO_TCHAR(desc->name));
+				TResourceArray<uint8> InitDataResourceArray;
+				if (bInitData)
+				{
+					InitDataResourceArray.AddUninitialized(InitDataSize);
+					FMemory::Memcpy(InitDataResourceArray.GetData(), InitData, InitDataSize);
+					Info.ResourceArray = &InitDataResourceArray;
+				}
 				FRDGBufferDesc Desc = FRDGBufferDesc::CreateStructuredDesc(sizeof(uint32), Size);
 #if UE_VERSION_AT_LEAST(5, 3, 0)
-				FBufferRHIRef VB = FRHICommandListExecutor::GetImmediateCommandList().CreateBuffer(Size * sizeof(uint32), Desc.Usage, sizeof(uint32), Info.BulkData ? ERHIAccess::SRVCompute : GetUEAccessState(desc->initialState), Info);
+				FBufferRHIRef VB = FRHICommandListExecutor::GetImmediateCommandList().CreateBuffer(Size * sizeof(uint32), Desc.Usage, sizeof(uint32), bInitData ? ERHIAccess::SRVCompute : GetUEAccessState(desc->initialState), Info);
 #else
 				FBufferRHIRef VB = RHICreateBuffer(Size * sizeof(uint32), Desc.Usage, sizeof(uint32), Info.BulkData ? ERHIAccess::SRVCompute : GetUEAccessState(desc->initialState), Info);
 #endif
 				check(VB.GetReference());
 				TRefCountPtr<FRDGPooledBuffer>* PooledBuffer = new TRefCountPtr<FRDGPooledBuffer>;
 				*PooledBuffer = new FRDGPooledBuffer(VB, Desc, desc->resourceDescription.width, WCHAR_TO_TCHAR(desc->name));
-				if (Info.BulkData)
-				{
-#if UE_VERSION_AT_LEAST(5, 3, 0)
-					void* Dest = FRHICommandListExecutor::GetImmediateCommandList().LockBuffer(VB, 0, desc->resourceDescription.width, EResourceLockMode::RLM_WriteOnly);
 #else
-					void* Dest = RHILockBuffer(VB, 0, desc->resourceDescription.width, EResourceLockMode::RLM_WriteOnly);
-#endif
-					FMemory::Memcpy(Dest, BulkData.Data, FMath::Min(Size, desc->initData.size));
-#if UE_VERSION_AT_LEAST(5, 3, 0)
-					FRHICommandListExecutor::GetImmediateCommandList().UnlockBuffer(VB);
-#else
-					RHIUnlockBuffer(VB);
-#endif
-				}
+				FRDGBufferRef BufferRef = GraphBuilder->CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), Size), WCHAR_TO_TCHAR(desc->name));
+				TRefCountPtr<FRDGPooledBuffer>* PooledBuffer = new TRefCountPtr<FRDGPooledBuffer>;
+				ConvertToExternalBuffer(*GraphBuilder, BufferRef, *PooledBuffer);
+				FVertexBufferRHIRef VB = (*PooledBuffer)->GetVertexBufferRHI();
+				check(VB.GetReference());
 
+				if (bInitData)
+				{
+					void* Dest = RHILockVertexBuffer(VB, 0, desc->resourceDescription.width, EResourceLockMode::RLM_WriteOnly);
+					FMemory::Memcpy(Dest, BulkData.Data, FMath::Min(Size, desc->initData.size));
+					RHIUnlockVertexBuffer(VB);
+				}
+#endif
 				outTexture->internalIndex = Context->AddResource(VB.GetReference(), desc->resourceDescription.type, nullptr, nullptr, PooledBuffer);
 				Context->Resources[outTexture->internalIndex].Desc = desc->resourceDescription;
 				Context->Resources[outTexture->internalIndex].Desc.type = Type;
@@ -249,12 +268,16 @@ static FfxErrorCode CreateResource_UE(FfxInterface* backendInterface, const FfxC
 			}
 			case FFX_RESOURCE_TYPE_TEXTURE2D:
 			{
+				
 				uint32 NumMips = desc->resourceDescription.mipCount > 0 ? desc->resourceDescription.mipCount : FMath::FloorToInt(FMath::Log2((float)FMath::Max(desc->resourceDescription.width, desc->resourceDescription.height)));
 #if UE_VERSION_AT_LEAST(5, 1, 0)
 				FRHITextureCreateDesc Desc = FRHITextureCreateDesc::Create2D(WCHAR_TO_TCHAR(desc->name), desc->resourceDescription.width, desc->resourceDescription.height, GetUEFormat(desc->resourceDescription.format));
-				Desc.SetBulkData(Info.BulkData);
+				FFXTextureBulkData BulkData(InitData, InitDataSize);
+				if (bInitData) {
+					Desc.SetBulkData(&BulkData);
+				}
 				Desc.SetNumMips(NumMips);
-				Desc.SetInitialState(Info.BulkData ? ERHIAccess::SRVCompute : GetUEAccessState(desc->initialState));
+				Desc.SetInitialState(bInitData ? ERHIAccess::SRVCompute : GetUEAccessState(desc->initialState));
 				Desc.SetNumSamples(1);
 				Desc.SetFlags(Flags);
 				FTextureRHIRef Texture = RHICreateTexture(Desc);
@@ -276,9 +299,12 @@ static FfxErrorCode CreateResource_UE(FfxInterface* backendInterface, const FfxC
 				uint32 NumMips = desc->resourceDescription.mipCount > 0 ? desc->resourceDescription.mipCount : FMath::FloorToInt(FMath::Log2((float)FMath::Max(FMath::Max(desc->resourceDescription.width, desc->resourceDescription.height), desc->resourceDescription.depth)));
 #if UE_VERSION_AT_LEAST(5, 1, 0)
 				FRHITextureCreateDesc Desc = FRHITextureCreateDesc::Create3D(WCHAR_TO_TCHAR(desc->name), desc->resourceDescription.width, desc->resourceDescription.height, desc->resourceDescription.depth, GetUEFormat(desc->resourceDescription.format));
-				Desc.SetBulkData(Info.BulkData);
+				FFXTextureBulkData BulkData(InitData, InitDataSize);
+				if (bInitData) {
+					Desc.SetBulkData(&BulkData);
+				}
 				Desc.SetNumMips(NumMips);
-				Desc.SetInitialState(Info.BulkData ? ERHIAccess::SRVCompute : GetUEAccessState(desc->initialState));
+				Desc.SetInitialState(bInitData ? ERHIAccess::SRVCompute : GetUEAccessState(desc->initialState));
 				Desc.SetNumSamples(1);
 				Desc.SetFlags(Flags);
 				FTextureRHIRef Texture = RHICreateTexture(Desc);
@@ -303,9 +329,9 @@ static FfxErrorCode CreateResource_UE(FfxInterface* backendInterface, const FfxC
 			}
 		}
 
-		if (desc->resourceDescription.format == FFX_SURFACE_FORMAT_R16_SNORM && Info.BulkData)
+		if (bInitData && (desc->resourceDescription.format == FFX_SURFACE_FORMAT_R16_SNORM || desc->resourceDescription.format == FFX_SURFACE_FORMAT_R16G16_SINT))
 		{
-			FMemory::Free(const_cast<void*>(BulkData.Data));
+			FMemory::Free(InitData);
 		}
 	}
 	else
@@ -326,11 +352,13 @@ static FfxResourceDescription GetResourceDesc_UE(FfxInterface* backendInterface,
 
 static FfxErrorCode GetDeviceCapabilities_UE(FfxInterface* backendInterface, FfxDeviceCapabilities* deviceCapabilities)
 {
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 	if (GetFeatureLevelShaderPlatform(ERHIFeatureLevel::SM6) != SP_NumPlatforms)
 	{
 		deviceCapabilities->maximumSupportedShaderModel = FFX_SHADER_MODEL_6_0;
 	}
 	else
+#endif
 	{
 		deviceCapabilities->maximumSupportedShaderModel = FFX_SHADER_MODEL_5_1;
 	}
@@ -443,6 +471,30 @@ static FfxErrorCode ScheduleRenderJob_UE(FfxInterface* backendInterface, const F
 
 	return FFX_OK;
 }
+
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+static bool IsFloatFormat(EPixelFormat Format)
+{
+	switch (Format)
+	{
+	case PF_A32B32G32R32F:
+	case PF_FloatRGB:
+	case PF_FloatRGBA:
+	case PF_R32_FLOAT:
+	case PF_G16R16F:
+	case PF_G16R16F_FILTER:
+	case PF_G32R32F:
+	case PF_R16F:
+	case PF_R16F_FILTER:
+	case PF_FloatR11G11B10:
+		return true;
+
+	default:
+		break;
+	}
+	return false;
+}
+#endif
 
 static FfxErrorCode FlushRenderJobs_UE(FfxInterface* backendInterface, FfxCommandList commandList, FfxUInt32 effectContextId)
 {
@@ -670,7 +722,11 @@ static FfxErrorCode RegisterResource_UE(FfxInterface* backendInterface, const Ff
 			{
 			case FFX_RESOURCE_TYPE_BUFFER:
 			{
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 				FRHIBuffer* Buffer = (FRHIBuffer*)((((uintptr_t)inResource->resource) & 0xfffffffffffffffe));
+#else
+				FRHIResource* Buffer = (FRHIResource*)((((uintptr_t)inResource->resource) & 0xfffffffffffffffe));
+#endif
 				outResource->internalIndex = Context->AddResource(Buffer, inResource->description.type, nullptr, nullptr, nullptr);
 				check(Context->IsValidIndex(outResource->internalIndex));
 				Context->MarkDynamic(outResource->internalIndex);
@@ -1126,6 +1182,18 @@ FRHIResource* FFXBackendState::GetResource(uint32 Index)
 	return Res;
 }
 
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+__declspec(noinline) FRDGTextureRef RegisterExternalTexture(FRDGBuilder& GraphBuilder, FRHITexture* Texture, const TCHAR* NameIfUnregistered)
+{
+	if (FRDGTextureRef FoundTexture = GraphBuilder.FindExternalTexture(Texture))
+	{
+		return FoundTexture;
+	}
+
+	return GraphBuilder.RegisterExternalTexture(CreateRenderTarget(Texture, NameIfUnregistered));
+}
+#endif
+
 FRDGTextureRef FFXBackendState::GetOrRegisterExternalTexture(FRDGBuilder& GraphBuilder, uint32 Index)
 {
 	FRDGTextureRef Texture;
@@ -1149,7 +1217,7 @@ FRDGTexture* FFXBackendState::GetRDGTexture(FRDGBuilder& GraphBuilder, uint32 In
 		}
 		else if (!RDG && Resources[Index].Resource)
 		{
-#if (UE_BUILD_DEBUG || UE_BUILD_DEVELOPMENT) && RHI_ENABLE_RESOURCE_INFO
+#if (UE_BUILD_DEBUG || UE_BUILD_DEVELOPMENT) && defined(RHI_ENABLE_RESOURCE_INFO) && (RHI_ENABLE_RESOURCE_INFO != 0)
 			FRHIResourceInfo Info;
 			Resources[Index].Resource->GetResourceInfo(Info);
 			RDG = RegisterExternalTexture(GraphBuilder, (FRHITexture*)Resources[Index].Resource, *Info.Name.ToString());
@@ -1308,12 +1376,6 @@ void FFXRHIBackend::Init()
 		auto SwapChainSize = Viewport->GetSizeXY();
 		ENQUEUE_RENDER_COMMAND(FFXFrameInterpolationCreateCustomPresent)([FFXFrameInterpolation, this, Flags, SwapChainSize, SurfaceFormat](FRHICommandListImmediate& RHICmdList)
 		{
-			ERHIPipeline Pipeline = RHICmdList.GetPipeline();
-
-			if (Pipeline == ERHIPipeline::None)
-			{
-				RHICmdList.SwitchPipeline(ERHIPipeline::Graphics);
-			}
 			auto* CustomPresent = FFXFrameInterpolation->CreateCustomPresent(this, Flags, SwapChainSize, SwapChainSize, (FfxSwapchain)nullptr, (FfxCommandQueue)GDynamicRHI, GetFFXApiFormat(SurfaceFormat, false), EFFXBackendAPI::Unreal);
 			if (CustomPresent)
 			{
@@ -1415,6 +1477,7 @@ FfxApiResource FFXRHIBackend::GetNativeResource(FRHITexture* Texture, FfxApiReso
 	Result.description.depth = Size.Z;
 	Result.description.mipCount = Texture->GetNumMips();
 	
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 	switch (Texture->GetType())
 	{
 	case RRT_Texture2D:
@@ -1428,6 +1491,21 @@ FfxApiResource FFXRHIBackend::GetNativeResource(FRHITexture* Texture, FfxApiReso
 		check(false);
 		break;
 	}
+#else
+	if (Texture->GetTexture2D())
+	{
+		Result.description.type = FFX_RESOURCE_TYPE_TEXTURE2D;
+	}
+	else if (Texture->GetTexture2DArray())
+	{
+		Result.description.type = FFX_RESOURCE_TYPE_TEXTURE2D;
+		Result.description.depth = Size.Z;
+	}
+	else
+	{
+		check(false);
+	}
+#endif
 #endif
 
 	return Result;
@@ -1441,11 +1519,13 @@ FfxShaderModel FFXRHIBackend::GetSupportedShaderModel()
 	FfxShaderModel ShaderModel = FFX_SHADER_MODEL_5_1;
 	switch (GMaxRHIFeatureLevel)
 	{
+#if UE_VERSION_AT_LEAST(5, 0, 0)
 		case ERHIFeatureLevel::SM6:
 		{
 			ShaderModel = FFX_SHADER_MODEL_6_5;
 			break;
 		}
+#endif
 		case ERHIFeatureLevel::ES3_1:
 		case ERHIFeatureLevel::SM5:
 		case ERHIFeatureLevel::ES2_REMOVED:
@@ -1479,6 +1559,12 @@ void FFXRHIBackend::UpdateSwapChain(ffxContext* Context, ffxConfigureDescFrameGe
 		auto Code = ffxConfigure(Context, &Desc.header);
 		check(Code == FFX_API_RETURN_OK);
 	}
+}
+
+void FFXRHIBackend::UpdateSwapChain(ffxContext* Context, ffxConfigureDescFrameGeneration& Desc, ffxConfigureDescFrameGenerationRegisterDistortionFieldResource& DescDistortion)
+{
+	Desc.header.pNext = &(DescDistortion.header);
+	UpdateSwapChain(Context, Desc);
 }
 
 FfxApiResource FFXRHIBackend::GetInterpolationOutput(FfxSwapchain SwapChain)

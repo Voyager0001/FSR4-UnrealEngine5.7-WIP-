@@ -1,6 +1,6 @@
-<!-- @page page_techniques_optical-flow FidelityFX Optical Flow 1.1.1 -->
+<!-- @page page_techniques_optical-flow FidelityFX Optical Flow 1.1.2 -->
 
-<h1>FidelityFX Optical Flow 1.1.1</h1>
+<h1>FidelityFX Optical Flow 1.1.2</h1>
 
 <h2>Introduction</h2>
 

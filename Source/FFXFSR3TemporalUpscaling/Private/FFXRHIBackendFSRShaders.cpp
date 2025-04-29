@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -97,8 +97,10 @@ bool FFXFSRGlobalShader::ShouldCompilePermutation(const FGlobalShaderPermutation
 {
 #if UE_VERSION_AT_LEAST(5, 1, 0)
 	bool const bWaveOps = FDataDrivenShaderPlatformInfo::GetSupportsWaveOperations(Parameters.Platform) == ERHIFeatureSupport::RuntimeGuaranteed;
-#else
+#elif UE_VERSION_AT_LEAST(5, 0, 0)
 	bool const bWaveOps = RHISupportsWaveOperations(Parameters.Platform);
+#else
+	bool const bWaveOps = Parameters.Platform == SP_PCD3D_SM5;
 #endif
 	return bWaveOps && FFXGlobalShader::ShouldCompilePermutation(Parameters);
 }

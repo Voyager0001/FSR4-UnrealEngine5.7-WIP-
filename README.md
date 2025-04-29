@@ -1,17 +1,11 @@
-# FidelityFX Super Resolution 3 (Deprecated)
-The AMD FidelityFX Super Resolution 3 (FSR3) plugin for Unreal Engine 5.5.1.
-
-Latest release: https://gpuopen.com/learn/ue-fsr3/
-
-
-
-As of right now Frame Gen is not working.-Voyager
+# FidelityFX Super Resolution 3
+The AMD FidelityFX Super Resolution 3 (FSR3) plugin for Unreal Engine.
 
 ## Setup
 
 To install the plugin:
 1. Extract the zip file.
-2. Place the FSR3 folder within your Unreal Engine source tree at: Engine/Plugins/Marketplace or in your project's plugins folder 
+2. Place the FSR3 folder within your Unreal Engine source tree at: Engine/Plugins/Marketplace 
 3. Open UnrealEditor.
 4. Go to the Plugins window & enable FSR3
 5. Restart.

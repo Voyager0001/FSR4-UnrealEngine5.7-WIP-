@@ -1,6 +1,6 @@
 // This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
 //
-// Copyright (c) 2023-2024 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -28,7 +28,14 @@
 
 bool FFXGlobalShader::ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 {
-	return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5) && IsPCPlatform(Parameters.Platform);
+#if UE_VERSION_AT_LEAST(5, 1, 0)
+	bool const bWaveOps = FDataDrivenShaderPlatformInfo::GetSupportsWaveOperations(Parameters.Platform) == ERHIFeatureSupport::RuntimeGuaranteed;
+#elif UE_VERSION_AT_LEAST(5, 0, 0)
+	bool const bWaveOps = RHISupportsWaveOperations(Parameters.Platform);
+#else
+	bool const bWaveOps = FDataDrivenShaderPlatformInfo::GetSupportsWaveOperations(Parameters.Platform) || (Parameters.Platform == SP_PCD3D_SM5);
+#endif
+	return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5) && bWaveOps && IsPCPlatform(Parameters.Platform);
 }
 
 void FFXGlobalShader::ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment, bool bPreferWave64)
@@ -36,18 +43,28 @@ void FFXGlobalShader::ModifyCompilationEnvironment(const FGlobalShaderPermutatio
 	FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 
 	OutEnvironment.CompilerFlags.Add(CFLAG_AllowTypedUAVLoads);
+	OutEnvironment.CompilerFlags.Add(CFLAG_WaveOperations);
+	if (Parameters.Platform == SP_PCD3D_SM5)
+	{
+		OutEnvironment.CompilerFlags.Add(CFLAG_ForceDXC);
+	}
 
 	OutEnvironment.SetDefine(TEXT("FFX_GPU"), 1);
 	OutEnvironment.SetDefine(TEXT("FFX_HLSL"), 1);
-	
-	// Remove the unorm attribute when compiling with DX to avoid an fxc error - should be irrelevant for DXC.
-	if (IsD3DPlatform(Parameters.Platform) && !IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM6))
-	{
-		OutEnvironment.SetDefine(TEXT("unorm"), TEXT(" "));
-	}
+
+#if UE_VERSION_AT_LEAST(5, 0, 0)	
+	OutEnvironment.SetDefine(TEXT("UNREAL_VERSION"), 5);
+#else
+	OutEnvironment.SetDefine(TEXT("UNREAL_VERSION"), 4);
+#endif
 
 #if UE_VERSION_AT_LEAST(5, 1, 0)
-	if (bPreferWave64 && IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM6))
+	if (bPreferWave64 
+#if UE_VERSION_AT_LEAST(5, 4, 0)
+		&& FDataDrivenShaderPlatformInfo::GetSupportsWave64(Parameters.Platform))
+#else
+		&& IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM6))
+#endif
 	{
 		OutEnvironment.SetDefine(TEXT("FFX_PREFER_WAVE64"), TEXT("[WaveSize(64)]"));
 	}
