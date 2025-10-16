@@ -1,0 +1,547 @@
+From b503154516c7083763863bf95b17ef2abd708a2b Mon Sep 17 00:00:00 2001
+From: "McQuaig, Timothy" <tmcquaig@amd.com>
+Date: Mon, 14 Jul 2025 16:38:55 -0400
+Subject: [PATCH] Integrate LitReactive for UE5.6
+
+This is a straight integration, but I still have some open questions.  Conversations with Tom are on-going, and future updates may be necessary.
+---
+ .../SpriteEditor/SpriteDetailsCustomization.cpp       |  2 +-
+ Engine/Shaders/Private/BasePassCommon.ush             |  2 +-
+ Engine/Shaders/Private/BasePassPixelShader.usf        |  2 +-
+ .../Private/ClusteredDeferredShadingPixelShader.usf   |  1 +
+ Engine/Shaders/Private/DeferredShadingCommon.ush      |  3 ++-
+ Engine/Shaders/Private/Definitions.usf                |  4 ++++
+ .../Material/PathTracingMaterialSampling.ush          |  4 ++++
+ .../PathTracing/PathTracingMaterialHitShader.usf      |  4 ++--
+ .../RayTracing/RayTracingMaterialHitShaders.usf       |  7 +++++++
+ Engine/Shaders/Private/ShadingCommon.ush              |  5 ++++-
+ Engine/Shaders/Private/ShadingModels.ush              |  1 +
+ Engine/Shaders/Private/ShadingModelsMaterial.ush      |  6 ++++++
+ Engine/Shaders/Private/ShadingModelsSampling.ush      |  2 ++
+ .../Private/PixelInspectorDetailsCustomization.cpp    |  1 +
+ .../PixelInspector/Private/PixelInspectorResult.cpp   |  8 ++++++++
+ .../PixelInspector/Private/PixelInspectorResult.h     |  1 +
+ .../UnrealEd/Private/Lightmass/LightmassRender.cpp    |  3 ++-
+ .../Runtime/Engine/Classes/Engine/EngineTypes.h       |  1 +
+ .../Private/Materials/HLSLMaterialTranslator.cpp      | 11 +++++++++++
+ .../Runtime/Engine/Private/Materials/Material.cpp     |  9 +++++----
+ .../Materials/MaterialAttributeDefinitionMap.cpp      |  1 +
+ .../Engine/Private/Materials/MaterialInterface.cpp    |  2 +-
+ .../Engine/Private/Materials/MaterialShader.cpp       |  3 ++-
+ .../Private/ShaderCompiler/ShaderGenerationUtil.cpp   | 11 +++++++++++
+ .../Source/Runtime/RenderCore/Public/ShaderMaterial.h |  1 +
+ .../Runtime/Renderer/Private/AnisotropyRendering.cpp  |  4 ++--
+ .../Runtime/Renderer/Private/PrimitiveSceneInfo.cpp   |  2 +-
+ 27 files changed, 84 insertions(+), 17 deletions(-)
+
+diff --git a/Engine/Plugins/2D/Paper2D/Source/Paper2DEditor/Private/SpriteEditor/SpriteDetailsCustomization.cpp b/Engine/Plugins/2D/Paper2D/Source/Paper2DEditor/Private/SpriteEditor/SpriteDetailsCustomization.cpp
+index fa91bb3a56..1a89c8bcc3 100644
+--- a/Engine/Plugins/2D/Paper2D/Source/Paper2DEditor/Private/SpriteEditor/SpriteDetailsCustomization.cpp
++++ b/Engine/Plugins/2D/Paper2D/Source/Paper2DEditor/Private/SpriteEditor/SpriteDetailsCustomization.cpp
+@@ -503,7 +503,7 @@ FText FSpriteDetailsCustomization::GetRenderingHeaderContentText(TWeakObjectPtr<
+ 			{
+ 				MaterialType = LOCTEXT("Unlit", "Unlit");
+ 			}
+-			else if (ShadingModels.HasOnlyShadingModel(MSM_DefaultLit))
++			else if (ShadingModels.HasOnlyShadingModel(MSM_DefaultLit) || ShadingModels.HasOnlyShadingModel(MSM_LitReactive))
+ 			{
+ 				MaterialType = LOCTEXT("Lit", "Lit");
+ 			}
+diff --git a/Engine/Shaders/Private/BasePassCommon.ush b/Engine/Shaders/Private/BasePassCommon.ush
+index 4b6279cbad..9fbf2e10fc 100644
+--- a/Engine/Shaders/Private/BasePassCommon.ush
++++ b/Engine/Shaders/Private/BasePassCommon.ush
+@@ -41,7 +41,7 @@
+ #define USES_GBUFFER						(FEATURE_LEVEL >= FEATURE_LEVEL_SM4 && (MATERIALBLENDING_SOLID || MATERIALBLENDING_MASKED) && !FORWARD_SHADING)
+ 
+ // Only some shader models actually need custom data.
+-#define WRITES_CUSTOMDATA_TO_GBUFFER		(USES_GBUFFER && (MATERIAL_SHADINGMODEL_SUBSURFACE || MATERIAL_SHADINGMODEL_PREINTEGRATED_SKIN || MATERIAL_SHADINGMODEL_SUBSURFACE_PROFILE || MATERIAL_SHADINGMODEL_CLEAR_COAT || MATERIAL_SHADINGMODEL_TWOSIDED_FOLIAGE || MATERIAL_SHADINGMODEL_HAIR || MATERIAL_SHADINGMODEL_CLOTH || MATERIAL_SHADINGMODEL_EYE))
++#define WRITES_CUSTOMDATA_TO_GBUFFER		(USES_GBUFFER && (MATERIAL_SHADINGMODEL_SUBSURFACE || MATERIAL_SHADINGMODEL_PREINTEGRATED_SKIN || MATERIAL_SHADINGMODEL_SUBSURFACE_PROFILE || MATERIAL_SHADINGMODEL_CLEAR_COAT || MATERIAL_SHADINGMODEL_TWOSIDED_FOLIAGE || MATERIAL_SHADINGMODEL_HAIR || MATERIAL_SHADINGMODEL_CLOTH || MATERIAL_SHADINGMODEL_EYE || MATERIAL_SHADINGMODEL_LIT_REACTIVE))
+ 
+ // Based on GetPrecomputedShadowMasks()
+ // Note: WRITES_PRECSHADOWFACTOR_TO_GBUFFER is currently disabled because we use the precomputed shadow factor GBuffer outside of STATICLIGHTING_TEXTUREMASK to store UseSingleSampleShadowFromStationaryLights
+diff --git a/Engine/Shaders/Private/BasePassPixelShader.usf b/Engine/Shaders/Private/BasePassPixelShader.usf
+index 9496954079..17fc2315e7 100644
+--- a/Engine/Shaders/Private/BasePassPixelShader.usf
++++ b/Engine/Shaders/Private/BasePassPixelShader.usf
+@@ -1464,7 +1464,7 @@ void FPixelShaderInOut_MainPS(
+ 
+ 	// Volume lighting for lit translucency
+ #if (MATERIAL_SHADINGMODEL_DEFAULT_LIT || MATERIAL_SHADINGMODEL_SUBSURFACE) && (MATERIALBLENDING_TRANSLUCENT || MATERIALBLENDING_ADDITIVE) && !FORWARD_SHADING
+-	if (GBuffer.ShadingModelID == SHADINGMODELID_DEFAULT_LIT || GBuffer.ShadingModelID == SHADINGMODELID_SUBSURFACE)
++	if (GBuffer.ShadingModelID == SHADINGMODELID_DEFAULT_LIT || GBuffer.ShadingModelID == SHADINGMODELID_SUBSURFACE || GBuffer.ShadingModelID == SHADINGMODELID_LIT_REACTIVE)
+ 	{
+ 		Color += GetTranslucencyVolumeLighting(MaterialParameters, PixelMaterialInputs, BasePassInterpolants, GBuffer, IndirectIrradiance);
+ 	}
+diff --git a/Engine/Shaders/Private/ClusteredDeferredShadingPixelShader.usf b/Engine/Shaders/Private/ClusteredDeferredShadingPixelShader.usf
+index ab378d2a04..52cc0eb05b 100644
+--- a/Engine/Shaders/Private/ClusteredDeferredShadingPixelShader.usf
++++ b/Engine/Shaders/Private/ClusteredDeferredShadingPixelShader.usf
+@@ -420,6 +420,7 @@ void ClusteredShadingPixelShader(
+ 	GET_LIGHT_GRID_LOCAL_LIGHTING_SINGLE_SM(SHADINGMODELID_CLOTH,				PixelShadingModelID, CompositedLighting, ScreenUV, CulledLightGridHeader, Dither);
+ 	GET_LIGHT_GRID_LOCAL_LIGHTING_SINGLE_SM(SHADINGMODELID_EYE,					PixelShadingModelID, CompositedLighting, ScreenUV, CulledLightGridHeader, Dither);
+ 	GET_LIGHT_GRID_LOCAL_LIGHTING_SINGLE_SM(SHADINGMODELID_SINGLELAYERWATER,	PixelShadingModelID, CompositedLighting, ScreenUV, CulledLightGridHeader, Dither);
++	GET_LIGHT_GRID_LOCAL_LIGHTING_SINGLE_SM(SHADINGMODELID_LIT_REACTIVE,		PixelShadingModelID, CompositedLighting, ScreenUV, CulledLightGridHeader, Dither);
+ 	// SHADINGMODELID_THIN_TRANSLUCENT - skipping because it can not be opaque
+ #else // !USE_PASS_PER_SHADING_MODEL
+ 	CompositedLighting += GetLightGridLocalLighting(GetScreenSpaceData(ScreenUV), CulledLightGridHeader, TranslatedWorldPosition, CameraVector, ScreenUV, SceneDepth, 0, Dither);
+diff --git a/Engine/Shaders/Private/DeferredShadingCommon.ush b/Engine/Shaders/Private/DeferredShadingCommon.ush
+index 5cb087ccf0..ecb66e1cd9 100644
+--- a/Engine/Shaders/Private/DeferredShadingCommon.ush
++++ b/Engine/Shaders/Private/DeferredShadingCommon.ush
+@@ -321,7 +321,8 @@ bool HasCustomGBufferData(int ShadingModelID)
+ 		|| ShadingModelID == SHADINGMODELID_TWOSIDED_FOLIAGE
+ 		|| ShadingModelID == SHADINGMODELID_HAIR
+ 		|| ShadingModelID == SHADINGMODELID_CLOTH
+-		|| ShadingModelID == SHADINGMODELID_EYE;
++		|| ShadingModelID == SHADINGMODELID_EYE
++		|| ShadingModelID == SHADINGMODELID_LIT_REACTIVE;
+ }
+ 
+ bool HasAnisotropy(int SelectiveOutputMask)
+diff --git a/Engine/Shaders/Private/Definitions.usf b/Engine/Shaders/Private/Definitions.usf
+index 2f8d2b6c7a..342af28da1 100644
+--- a/Engine/Shaders/Private/Definitions.usf
++++ b/Engine/Shaders/Private/Definitions.usf
+@@ -105,6 +105,10 @@
+ #define MATERIAL_SHADINGMODEL_DEFAULT_LIT				0
+ #endif
+ 
++#ifndef MATERIAL_SHADINGMODEL_LIT_REACTIVE
++#define MATERIAL_SHADINGMODEL_LIT_REACTIVE				0
++#endif
++
+ #ifndef MATERIAL_SHADINGMODEL_SUBSURFACE
+ #define MATERIAL_SHADINGMODEL_SUBSURFACE				0
+ #endif
+diff --git a/Engine/Shaders/Private/PathTracing/Material/PathTracingMaterialSampling.ush b/Engine/Shaders/Private/PathTracing/Material/PathTracingMaterialSampling.ush
+index 70ac311b7e..9e1a596cd7 100644
+--- a/Engine/Shaders/Private/PathTracing/Material/PathTracingMaterialSampling.ush
++++ b/Engine/Shaders/Private/PathTracing/Material/PathTracingMaterialSampling.ush
+@@ -87,6 +87,7 @@ float3 EstimateMaterialAlbedo(FPathTracingPayload Payload)
+ 			Albedo = Payload.DiffuseColor + Payload.SpecularColor + Payload.SubsurfaceColor;
+ 			break;
+ 		case SHADINGMODELID_DEFAULT_LIT:
++		case SHADINGMODELID_LIT_REACTIVE:
+ 			Albedo = Payload.DiffuseColor + Payload.SpecularColor;
+ 			break;
+ 		case SHADINGMODELID_CLEAR_COAT:
+@@ -225,6 +226,7 @@ void AccumulateAlbedoNormal(inout FPathTracingPayload Payload, float3 PathThroug
+ 		Normal += BrdfWeight * NormThroughput * Payload.WorldNormal;
+ 		break;
+ 	case SHADINGMODELID_DEFAULT_LIT:
++	case SHADINGMODELID_LIT_REACTIVE:
+ 	case SHADINGMODELID_CLEAR_COAT: // TODO: can we be more precise with clearcoat?
+ 		Albedo += BrdfWeight * PathThroughput * (Payload.DiffuseColor + RoughnessWeight * Payload.SpecularColor);
+ 		Normal += BrdfWeight * NormThroughput * Payload.WorldNormal;
+@@ -597,6 +599,7 @@ FMaterialSample SampleMaterial(
+ 			return SubstrateClearCoat_SampleMaterial(V_World, Payload, RandSample);
+ #else
+ 		case SHADINGMODELID_DEFAULT_LIT:
++		case SHADINGMODELID_LIT_REACTIVE:
+ 		case SHADINGMODELID_SUBSURFACE:
+ 		case SHADINGMODELID_PREINTEGRATED_SKIN:
+ 			return DefaultLit_SampleMaterial(V_World, Payload, RandSample);
+@@ -654,6 +657,7 @@ FMaterialEval EvalMaterial(
+ 			return SubstrateClearCoat_EvalMaterial(V_World, L_World, Payload, DiffuseSpecularScale);
+ #else
+ 		case SHADINGMODELID_DEFAULT_LIT:
++		case SHADINGMODELID_LIT_REACTIVE:
+ 		case SHADINGMODELID_SUBSURFACE:
+ 		case SHADINGMODELID_PREINTEGRATED_SKIN:
+ 			return DefaultLit_EvalMaterial(V_World, L_World, Payload, DiffuseSpecularScale);
+diff --git a/Engine/Shaders/Private/PathTracing/PathTracingMaterialHitShader.usf b/Engine/Shaders/Private/PathTracing/PathTracingMaterialHitShader.usf
+index 1c41671321..712f2f624d 100644
+--- a/Engine/Shaders/Private/PathTracing/PathTracingMaterialHitShader.usf
++++ b/Engine/Shaders/Private/PathTracing/PathTracingMaterialHitShader.usf
+@@ -1176,8 +1176,8 @@ RAY_TRACING_ENTRY_CLOSEST_HIT(PathTracingMaterialCHS,
+ 	else
+ #endif
+ 
+-#if MATERIAL_SHADINGMODEL_DEFAULT_LIT
+-	if (Payload.ShadingModelID == SHADINGMODELID_DEFAULT_LIT)
++#if MATERIAL_SHADINGMODEL_DEFAULT_LIT || MATERIAL_SHADINGMODEL_LIT_REACTIVE
++	if (Payload.ShadingModelID == SHADINGMODELID_DEFAULT_LIT || Payload.ShadingModelID == SHADINGMODELID_LIT_REACTIVE)
+ 	{
+ 		// only allow refraction for default lit materials since we need space for the absorption amount
+ #if HAVE_GetAbsorptionMediumMaterialOutput0
+diff --git a/Engine/Shaders/Private/RayTracing/RayTracingMaterialHitShaders.usf b/Engine/Shaders/Private/RayTracing/RayTracingMaterialHitShaders.usf
+index 3ede58502a..9e4121238b 100644
+--- a/Engine/Shaders/Private/RayTracing/RayTracingMaterialHitShaders.usf
++++ b/Engine/Shaders/Private/RayTracing/RayTracingMaterialHitShaders.usf
+@@ -569,6 +569,13 @@ void GetMaterialPayload(
+ 	}
+ #endif
+ 
++#if MATERIAL_SHADINGMODEL_LIT_REACTIVE
++	if (Payload.ShadingModelID == SHADINGMODELID_LIT_REACTIVE)
++	{
++		Payload.CustomData.x = GetMaterialCustomData0(PixelMaterialInputs);
++	}
++#endif
++	
+ #if MATERIAL_USES_ANISOTROPY
+ 	Payload.WorldTangent = WorldTangent;
+ 	Payload.Anisotropy = Anisotropy;
+diff --git a/Engine/Shaders/Private/ShadingCommon.ush b/Engine/Shaders/Private/ShadingCommon.ush
+index 87cd30c951..b0b2cfaec3 100644
+--- a/Engine/Shaders/Private/ShadingCommon.ush
++++ b/Engine/Shaders/Private/ShadingCommon.ush
+@@ -30,7 +30,8 @@
+ #define SHADINGMODELID_SINGLELAYERWATER		10
+ #define SHADINGMODELID_THIN_TRANSLUCENT		11
+ #define SHADINGMODELID_SUBSTRATE			12		// Temporary while we convert everything to Substrate
+-#define SHADINGMODELID_NUM					13
++#define SHADINGMODELID_LIT_REACTIVE         13
++#define SHADINGMODELID_NUM					14
+ #define SHADINGMODELID_MASK					0xF		// 4 bits reserved for ShadingModelID			
+ 
+ // The flags are defined so that 0 value has no effect!
+@@ -63,6 +64,7 @@ float3 GetShadingModelColor(uint ShadingModelID)
+ 	else if (ShadingModelID == SHADINGMODELID_SINGLELAYERWATER) return float3(0.5f, 0.5f, 1.0f);
+ 	else if (ShadingModelID == SHADINGMODELID_THIN_TRANSLUCENT) return float3(1.0f, 0.8f, 0.3f);
+ 	else if (ShadingModelID == SHADINGMODELID_SUBSTRATE) return float3(1.0f, 1.0f, 0.0f);
++	else if (ShadingModelID == SHADINGMODELID_LIT_REACTIVE) return float3(1.0f, 0.8f, 0.5f);
+ 	else return float3(1.0f, 1.0f, 1.0f); // White
+ #else
+ 	switch(ShadingModelID)
+@@ -80,6 +82,7 @@ float3 GetShadingModelColor(uint ShadingModelID)
+ 		case SHADINGMODELID_SINGLELAYERWATER: return float3(0.5f, 0.5f, 1.0f);
+ 		case SHADINGMODELID_THIN_TRANSLUCENT: return float3(1.0f, 0.8f, 0.3f);
+ 		case SHADINGMODELID_SUBSTRATE: return float3(1.0f, 1.0f, 0.0f);
++		case SHADINGMODELID_LIT_REACTIVE: return float3(1.0f, 0.8f, 0.5f);
+ 		default: return float3(1.0f, 1.0f, 1.0f); // White
+ 	}
+ #endif
+diff --git a/Engine/Shaders/Private/ShadingModels.ush b/Engine/Shaders/Private/ShadingModels.ush
+index baced3d0c1..d73f40868f 100644
+--- a/Engine/Shaders/Private/ShadingModels.ush
++++ b/Engine/Shaders/Private/ShadingModels.ush
+@@ -941,6 +941,7 @@ FDirectLighting IntegrateBxDF( FGBufferData GBuffer, half3 N, half3 V, half3 L,
+ 	switch( GBuffer.ShadingModelID )
+ 	{
+ 		case SHADINGMODELID_DEFAULT_LIT:
++		case SHADINGMODELID_LIT_REACTIVE:
+ 		case SHADINGMODELID_SINGLELAYERWATER:
+ 		case SHADINGMODELID_THIN_TRANSLUCENT:
+ 			return DefaultLitBxDF( GBuffer, N, V, L, Falloff, NoL, AreaLight, Shadow );
+diff --git a/Engine/Shaders/Private/ShadingModelsMaterial.ush b/Engine/Shaders/Private/ShadingModelsMaterial.ush
+index 70636f2f3f..8895a79187 100644
+--- a/Engine/Shaders/Private/ShadingModelsMaterial.ush
++++ b/Engine/Shaders/Private/ShadingModelsMaterial.ush
+@@ -39,6 +39,12 @@ void SetGBufferForShadingModel(
+ 	if (false)
+ 	{
+ 	}
++#if MATERIAL_SHADINGMODEL_LIT_REACTIVE
++   else if (ShadingModel == SHADINGMODELID_LIT_REACTIVE)
++   {
++       GBuffer.CustomData.x = GetMaterialCustomData0(PixelMaterialInputs);
++   }
++#endif
+ #if MATERIAL_SHADINGMODEL_SUBSURFACE
+ 	else if (ShadingModel == SHADINGMODELID_SUBSURFACE)
+ 	{
+diff --git a/Engine/Shaders/Private/ShadingModelsSampling.ush b/Engine/Shaders/Private/ShadingModelsSampling.ush
+index c10b4778d3..1709a359c3 100644
+--- a/Engine/Shaders/Private/ShadingModelsSampling.ush
++++ b/Engine/Shaders/Private/ShadingModelsSampling.ush
+@@ -207,6 +207,7 @@ FBxDFSample SampleBxDF(const uint TermMask, FGBufferData GBuffer, float3 V, floa
+ 	switch( GBuffer.ShadingModelID )
+ 	{
+ 		case SHADINGMODELID_DEFAULT_LIT:
++		case SHADINGMODELID_LIT_REACTIVE:
+ 		case SHADINGMODELID_SINGLELAYERWATER:
+ 		case SHADINGMODELID_SUBSURFACE:
+ 		case SHADINGMODELID_SUBSURFACE_PROFILE:
+@@ -228,6 +229,7 @@ bool SupportsSampleBxDF(uint ShadingModelID)
+ 	switch (ShadingModelID)
+ 	{
+ 	case SHADINGMODELID_DEFAULT_LIT:
++	case SHADINGMODELID_LIT_REACTIVE:
+ 	case SHADINGMODELID_SINGLELAYERWATER:
+ 	case SHADINGMODELID_SUBSURFACE:
+ 	case SHADINGMODELID_SUBSURFACE_PROFILE:
+diff --git a/Engine/Source/Editor/PixelInspector/Private/PixelInspectorDetailsCustomization.cpp b/Engine/Source/Editor/PixelInspector/Private/PixelInspectorDetailsCustomization.cpp
+index 54da163053..d9cfc54de7 100644
+--- a/Engine/Source/Editor/PixelInspector/Private/PixelInspectorDetailsCustomization.cpp
++++ b/Engine/Source/Editor/PixelInspector/Private/PixelInspectorDetailsCustomization.cpp
+@@ -164,6 +164,7 @@ void FPixelInspectorDetailsCustomization::CustomizeDetails(IDetailLayoutBuilder&
+ 		case MSM_SingleLayerWater:
+ 		case MSM_ThinTranslucent:
+ 		case MSM_Unlit:
++		case MSM_LitReactive:
+ 		{
+ 			DetailBuilder.HideProperty(SubSurfaceColorProp);
+ 			DetailBuilder.HideProperty(SubSurfaceProfileProp);
+diff --git a/Engine/Source/Editor/PixelInspector/Private/PixelInspectorResult.cpp b/Engine/Source/Editor/PixelInspector/Private/PixelInspectorResult.cpp
+index aa59d9e0ea..3774e82caa 100644
+--- a/Engine/Source/Editor/PixelInspector/Private/PixelInspectorResult.cpp
++++ b/Engine/Source/Editor/PixelInspector/Private/PixelInspectorResult.cpp
+@@ -267,6 +267,8 @@ namespace PixelInspector
+ 			return EMaterialShadingModel::MSM_ThinTranslucent;
+ 		case PIXEL_INSPECTOR_SHADINGMODELID_SUBSTRATE:
+ 			return EMaterialShadingModel::MSM_Strata;
++		case PIXEL_INSPECTOR_SHADINGMODELID_LIT_REACTIVE:
++			return EMaterialShadingModel::MSM_LitReactive;
+ 		};
+ 		return EMaterialShadingModel::MSM_DefaultLit;
+ 	}
+@@ -361,6 +363,12 @@ namespace PixelInspector
+ 			IrisDistance = InCustomData.W;
+ 		}
+ 		break;
++		case EMaterialShadingModel::MSM_LitReactive:
++		{
++			SubSurfaceColor = FVector3f(0.0f);
++			Opacity = InCustomData.X;
++		}
++		break;
+ 		};
+ 	}
+ };
+diff --git a/Engine/Source/Editor/PixelInspector/Private/PixelInspectorResult.h b/Engine/Source/Editor/PixelInspector/Private/PixelInspectorResult.h
+index 1ab7f6bf2c..b1bc058d11 100644
+--- a/Engine/Source/Editor/PixelInspector/Private/PixelInspectorResult.h
++++ b/Engine/Source/Editor/PixelInspector/Private/PixelInspectorResult.h
+@@ -25,6 +25,7 @@ class FFloat16Color;
+ #define PIXEL_INSPECTOR_SHADINGMODELID_SINGLELAYERWATER 10
+ #define PIXEL_INSPECTOR_SHADINGMODELID_THIN_TRANSLUCENT 11
+ #define PIXEL_INSPECTOR_SHADINGMODELID_SUBSTRATE 12
++#define PIXEL_INSPECTOR_SHADINGMODELID_LIT_REACTIVE 13
+ #define PIXEL_INSPECTOR_SHADINGMODELID_MASK 0xF
+ 
+ namespace PixelInspector
+diff --git a/Engine/Source/Editor/UnrealEd/Private/Lightmass/LightmassRender.cpp b/Engine/Source/Editor/UnrealEd/Private/Lightmass/LightmassRender.cpp
+index e35d228983..3e1ea63520 100644
+--- a/Engine/Source/Editor/UnrealEd/Private/Lightmass/LightmassRender.cpp
++++ b/Engine/Source/Editor/UnrealEd/Private/Lightmass/LightmassRender.cpp
+@@ -1142,7 +1142,8 @@ bool FLightmassMaterialRenderer::GenerateMaterialData(
+ 		!ShadingModels.HasShadingModel(MSM_Unlit) &&
+ 		!ShadingModels.HasShadingModel(MSM_Subsurface) &&
+ 		!ShadingModels.HasShadingModel(MSM_PreintegratedSkin) &&
+-		!ShadingModels.HasShadingModel(MSM_SubsurfaceProfile))
++		!ShadingModels.HasShadingModel(MSM_SubsurfaceProfile) &&
++		!ShadingModels.HasShadingModel(MSM_LitReactive))
+ 	{
+ 		UE_LOG(LogLightmassRender, Warning, TEXT("LIGHTMASS: Material has an unsupported shading model: %d on %s"), 
+ 			(int32)ShadingModels.GetShadingModelField(),
+diff --git a/Engine/Source/Runtime/Engine/Classes/Engine/EngineTypes.h b/Engine/Source/Runtime/Engine/Classes/Engine/EngineTypes.h
+index 394ee6f823..e787ca6ce5 100644
+--- a/Engine/Source/Runtime/Engine/Classes/Engine/EngineTypes.h
++++ b/Engine/Source/Runtime/Engine/Classes/Engine/EngineTypes.h
+@@ -709,6 +709,7 @@ enum EMaterialShadingModel : int
+ 	MSM_SingleLayerWater		UMETA(DisplayName="SingleLayerWater"),
+ 	MSM_ThinTranslucent			UMETA(DisplayName="Thin Translucent"),
+ 	MSM_Strata					UMETA(DisplayName="Substrate", Hidden),
++	MSM_LitReactive				UMETA(DisplayName = "Lit Reactive"),
+ 	/** Number of unique shading models. */
+ 	MSM_NUM						UMETA(Hidden),
+ 	/** Shading model will be determined by the Material Expression Graph,
+diff --git a/Engine/Source/Runtime/Engine/Private/Materials/HLSLMaterialTranslator.cpp b/Engine/Source/Runtime/Engine/Private/Materials/HLSLMaterialTranslator.cpp
+index 8d0332696f..c53228bba6 100644
+--- a/Engine/Source/Runtime/Engine/Private/Materials/HLSLMaterialTranslator.cpp
++++ b/Engine/Source/Runtime/Engine/Private/Materials/HLSLMaterialTranslator.cpp
+@@ -3027,6 +3027,11 @@ void FHLSLMaterialTranslator::GetMaterialEnvironment(EShaderPlatform InPlatform,
+ 			OutEnvironment.SetDefine(TEXT("MATERIAL_SHADINGMODEL_DEFAULT_LIT"), TEXT("1"));
+ 		}
+ 
++		if (EnvironmentDefines->HasShadingModel(MSM_LitReactive))
++		{
++			OutEnvironment.SetDefine(TEXT("MATERIAL_SHADINGMODEL_LIT_REACTIVE"), TEXT("1"));
++		}
++
+ 		if (EnvironmentDefines->HasShadingModel(MSM_Subsurface))
+ 		{
+ 			OutEnvironment.SetDefine(TEXT("MATERIAL_SHADINGMODEL_SUBSURFACE"), TEXT("1"));
+@@ -3088,6 +3093,12 @@ void FHLSLMaterialTranslator::GetMaterialEnvironment(EShaderPlatform InPlatform,
+ 			bMaterialRequestsDualSourceBlending = true;
+ 		}
+ 
++		if (EnvironmentDefines->HasShadingModel(MSM_LitReactive))
++		{
++			OutEnvironment.SetDefine(TEXT("MATERIAL_SHADINGMODEL_LIT_REACTIVE"), TEXT("1"));
++		}
++
++
+ 		if (EnvironmentDefines->bDisableForwardLocalLights)
+ 		{
+ 			OutEnvironment.SetDefine(TEXT("DISABLE_FORWARD_LOCAL_LIGHTS"), TEXT("1"));
+diff --git a/Engine/Source/Runtime/Engine/Private/Materials/Material.cpp b/Engine/Source/Runtime/Engine/Private/Materials/Material.cpp
+index fffb5d5982..b39411e49e 100644
+--- a/Engine/Source/Runtime/Engine/Private/Materials/Material.cpp
++++ b/Engine/Source/Runtime/Engine/Private/Materials/Material.cpp
+@@ -241,7 +241,7 @@ int32 FMaterialResource::CompilePropertyAndSetMaterialProperty(EMaterialProperty
+ 		case MP_OpacityMask:
+ 			// Force basic opaque surfaces to skip masked/translucent-only attributes.
+ 			// Some features can force the material to create a masked variant which unintentionally runs this dormant code
+-			if (GetMaterialDomain() != MD_Surface || !IsOpaqueBlendMode(GetBlendMode()) || (GetShadingModels().IsLit() && !GetShadingModels().HasOnlyShadingModel(MSM_DefaultLit)))
++			if (GetMaterialDomain() != MD_Surface || !IsOpaqueBlendMode(GetBlendMode()) || (GetShadingModels().IsLit() && !GetShadingModels().HasOnlyShadingModel(MSM_DefaultLit) && !GetShadingModels().HasOnlyShadingModel(MSM_LitReactive)))
+ 			{
+ 				Ret = MaterialInterface->CompileProperty(Compiler, Property);
+ 			}
+@@ -3358,6 +3358,7 @@ static void AddSurfaceSubstrateShadingModelFromMaterialShadingModels(FSubstrateM
+ 	if (InShadingModels.HasShadingModel(MSM_Eye))				{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_Eye); }
+ 	if (InShadingModels.HasShadingModel(MSM_SingleLayerWater))	{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_SingleLayerWater); }
+ 	if (InShadingModels.HasShadingModel(MSM_ThinTranslucent))	{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_ThinTranslucent); }
++	if (InShadingModels.HasShadingModel(MSM_LitReactive))		{ OutInfo.AddShadingModel(ESubstrateShadingModel::SSM_DefaultLit); }
+ }
+ 
+ static void AddSurfaceSubstrateShadingModelFromMaterialShadingModel(FSubstrateMaterialInfo& OutInfo, const EMaterialShadingModel& InShadingModel)
+@@ -7788,7 +7789,7 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
+ 			Active = ShadingModels.IsLit() && (!bIsTranslucentBlendMode || !bIsVolumetricTranslucencyLightingMode);
+ 			break;
+ 		case MP_Anisotropy:
+-			Active = ShadingModels.HasAnyShadingModel({ MSM_DefaultLit, MSM_ClearCoat }) && (!bIsTranslucentBlendMode || !bIsVolumetricTranslucencyLightingMode);
++			Active = ShadingModels.HasAnyShadingModel({ MSM_DefaultLit, MSM_ClearCoat, MSM_LitReactive }) && (!bIsTranslucentBlendMode || !bIsVolumetricTranslucencyLightingMode);
+ 			break;
+ 		case MP_Metallic:
+ 			// Subsurface models store opacity in place of Metallic in the GBuffer
+@@ -7798,13 +7799,13 @@ static bool IsPropertyActive_Internal(EMaterialProperty InProperty,
+ 			Active = (ShadingModels.IsLit() && (!bIsTranslucentBlendMode || !bIsNonDirectionalTranslucencyLightingMode)) || bUsesDistortion;
+ 			break;
+ 		case MP_Tangent:
+-			Active = ShadingModels.HasAnyShadingModel({ MSM_DefaultLit, MSM_ClearCoat }) && (!bIsTranslucentBlendMode || !bIsVolumetricTranslucencyLightingMode);
++			Active = ShadingModels.HasAnyShadingModel({ MSM_DefaultLit, MSM_ClearCoat, MSM_LitReactive }) && (!bIsTranslucentBlendMode || !bIsVolumetricTranslucencyLightingMode);
+ 			break;
+ 		case MP_SubsurfaceColor:
+ 			Active = ShadingModels.HasAnyShadingModel({ MSM_Subsurface, MSM_PreintegratedSkin, MSM_TwoSidedFoliage, MSM_Cloth });
+ 			break;
+ 		case MP_CustomData0:
+-			Active = ShadingModels.HasAnyShadingModel({ MSM_ClearCoat, MSM_Hair, MSM_Cloth, MSM_Eye, MSM_SubsurfaceProfile });
++			Active = ShadingModels.HasAnyShadingModel({ MSM_ClearCoat, MSM_Hair, MSM_Cloth, MSM_Eye, MSM_SubsurfaceProfile, MSM_LitReactive });
+ 			break;
+ 		case MP_CustomData1:
+ 			Active = ShadingModels.HasAnyShadingModel({ MSM_ClearCoat, MSM_Eye });
+diff --git a/Engine/Source/Runtime/Engine/Private/Materials/MaterialAttributeDefinitionMap.cpp b/Engine/Source/Runtime/Engine/Private/Materials/MaterialAttributeDefinitionMap.cpp
+index dc15e54803..e2f24dfcd0 100644
+--- a/Engine/Source/Runtime/Engine/Private/Materials/MaterialAttributeDefinitionMap.cpp
++++ b/Engine/Source/Runtime/Engine/Private/Materials/MaterialAttributeDefinitionMap.cpp
+@@ -489,6 +489,7 @@ FText FMaterialAttributeDefinitionMap::GetAttributeOverrideForMaterial(const FGu
+ 		CustomPinNames.Add({ MSM_Cloth, LOCTEXT("Cloth", "Cloth").ToString() });
+ 		CustomPinNames.Add({ MSM_Eye, LOCTEXT("IrisMask", "Iris Mask").ToString() });
+ 		CustomPinNames.Add({ MSM_SubsurfaceProfile, LOCTEXT("Curvature", "Curvature").ToString() });
++		CustomPinNames.Add({ MSM_LitReactive, LOCTEXT("Reactivity", "Reactivity").ToString() });
+ 		return FText::FromString(GetPinNameFromShadingModelField(Material->GetShadingModels(), CustomPinNames, LOCTEXT("CustomData0", "Custom Data 0").ToString()));
+ 	case MP_CustomData1:
+ 		CustomPinNames.Add({ MSM_ClearCoat, LOCTEXT("ClearCoatRoughness", "Clear Coat Roughness").ToString() });
+diff --git a/Engine/Source/Runtime/Engine/Private/Materials/MaterialInterface.cpp b/Engine/Source/Runtime/Engine/Private/Materials/MaterialInterface.cpp
+index 0d69b2ebf2..2975c56833 100644
+--- a/Engine/Source/Runtime/Engine/Private/Materials/MaterialInterface.cpp
++++ b/Engine/Source/Runtime/Engine/Private/Materials/MaterialInterface.cpp
+@@ -459,7 +459,7 @@ FMaterialRelevance UMaterialInterface::GetRelevance_Internal(const UMaterial* Ma
+ 
+ 	// Note that even though XX_GameThread() api is called, this function can be called on non game thread via 
+ 	// GetRelevance_Concurrent()
+-	bool bUsesAnisotropy = MaterialResource->GetShadingModels().HasAnyShadingModel({ MSM_DefaultLit, MSM_ClearCoat }) && 
++	bool bUsesAnisotropy = MaterialResource->GetShadingModels().HasAnyShadingModel({ MSM_DefaultLit, MSM_ClearCoat, MSM_LitReactive }) &&
+ 		MaterialResource->MaterialUsesAnisotropy_GameThread();
+ 
+ 	const EBlendMode BlendMode = (EBlendMode)GetBlendMode();
+diff --git a/Engine/Source/Runtime/Engine/Private/Materials/MaterialShader.cpp b/Engine/Source/Runtime/Engine/Private/Materials/MaterialShader.cpp
+index 703434cb6b..59da5557e0 100644
+--- a/Engine/Source/Runtime/Engine/Private/Materials/MaterialShader.cpp
++++ b/Engine/Source/Runtime/Engine/Private/Materials/MaterialShader.cpp
+@@ -135,6 +135,7 @@ FString GetShadingModelString(EMaterialShadingModel ShadingModel)
+ 		case MSM_Eye:				ShadingModelName = TEXT("MSM_Eye"); break;
+ 		case MSM_SingleLayerWater:	ShadingModelName = TEXT("MSM_SingleLayerWater"); break;
+ 		case MSM_ThinTranslucent:	ShadingModelName = TEXT("MSM_ThinTranslucent"); break;
++		case MSM_LitReactive:       ShadingModelName = TEXT("MSM_LitReactive"); break;
+ 		default: ShadingModelName = TEXT("Unknown"); break;
+ 	}
+ 	return ShadingModelName;
+@@ -562,7 +563,7 @@ void UpdateMaterialShaderCompilingStats(const FMaterial* Material)
+ 	{
+ 		INC_DWORD_STAT_BY(STAT_ShaderCompiling_NumUnlitMaterialShaders, 1);
+ 	}
+-	else if (ShadingModels.HasAnyShadingModel({ MSM_DefaultLit, MSM_Subsurface, MSM_PreintegratedSkin, MSM_ClearCoat, MSM_Cloth, MSM_SubsurfaceProfile, MSM_TwoSidedFoliage, MSM_SingleLayerWater, MSM_ThinTranslucent }))
++	else if (ShadingModels.HasAnyShadingModel({ MSM_DefaultLit, MSM_Subsurface, MSM_PreintegratedSkin, MSM_ClearCoat, MSM_Cloth, MSM_SubsurfaceProfile, MSM_TwoSidedFoliage, MSM_SingleLayerWater, MSM_ThinTranslucent, MSM_LitReactive }))
+ 	{
+ 		INC_DWORD_STAT_BY(STAT_ShaderCompiling_NumLitMaterialShaders, 1);
+ 	}
+diff --git a/Engine/Source/Runtime/Engine/Private/ShaderCompiler/ShaderGenerationUtil.cpp b/Engine/Source/Runtime/Engine/Private/ShaderCompiler/ShaderGenerationUtil.cpp
+index 897fadcf36..ea60de1200 100644
+--- a/Engine/Source/Runtime/Engine/Private/ShaderCompiler/ShaderGenerationUtil.cpp
++++ b/Engine/Source/Runtime/Engine/Private/ShaderCompiler/ShaderGenerationUtil.cpp
+@@ -130,6 +130,7 @@ void ApplyFetchEnvironmentInternal(FShaderMaterialPropertyDefines& SrcDefines, c
+ 	FETCH_COMPILE_BOOL(MATERIAL_SHADINGMODEL_EYE);
+ 	FETCH_COMPILE_BOOL(MATERIAL_SHADINGMODEL_SINGLELAYERWATER);
+ 	FETCH_COMPILE_BOOL(MATERIAL_SHADINGMODEL_THIN_TRANSLUCENT);
++	FETCH_COMPILE_BOOL(MATERIAL_SHADINGMODEL_LIT_REACTIVE);
+ 
+ 	FETCH_COMPILE_BOOL(SINGLE_LAYER_WATER_SEPARATED_MAIN_LIGHT);
+ 
+@@ -1634,6 +1635,10 @@ static void SetSlotsForShadingModelType(bool Slots[], EMaterialShadingModel Shad
+ 	case MSM_DefaultLit:
+ 		SetSharedGBufferSlots(Slots);
+ 		break;
++	case MSM_LitReactive:
++		SetSharedGBufferSlots(Slots);
++		Slots[GBS_CustomData] = true;
++		break;
+ 	case MSM_Subsurface:
+ 		SetSharedGBufferSlots(Slots);
+ 		if (bMergeCustom)
+@@ -1827,6 +1832,12 @@ static void DetermineUsedMaterialSlots(
+ 		SetStandardGBufferSlots(Slots, bWriteEmissive, bHasTangent, bHasVelocity, bWritesVelocity, bHasStaticLighting, bIsSubstrateMaterial, bIsSubstrateNewGBuffer);
+ 	}
+ 
++	if (Mat.MATERIAL_SHADINGMODEL_LIT_REACTIVE)
++	{
++		SetStandardGBufferSlots(Slots, bWriteEmissive, bHasTangent, bHasVelocity, bWritesVelocity, bHasStaticLighting, bIsSubstrateMaterial, bIsSubstrateNewGBuffer);
++		Slots[GBS_CustomData] = GetGBufferSlotUsage(bUseCustomData);
++	}
++
+ 	if (Mat.MATERIAL_SHADINGMODEL_SUBSURFACE)
+ 	{
+ 		SetStandardGBufferSlots(Slots, bWriteEmissive, bHasTangent, bHasVelocity, bWritesVelocity, bHasStaticLighting, bIsSubstrateMaterial, bIsSubstrateNewGBuffer);
+diff --git a/Engine/Source/Runtime/RenderCore/Public/ShaderMaterial.h b/Engine/Source/Runtime/RenderCore/Public/ShaderMaterial.h
+index 3b90c1e7e0..f20a708fd9 100644
+--- a/Engine/Source/Runtime/RenderCore/Public/ShaderMaterial.h
++++ b/Engine/Source/Runtime/RenderCore/Public/ShaderMaterial.h
+@@ -107,6 +107,7 @@ struct FShaderMaterialPropertyDefines
+ 	uint8 MATERIAL_SHADINGMODEL_SINGLELAYERWATER : 1;
+ 	uint8 SINGLE_LAYER_WATER_SEPARATED_MAIN_LIGHT : 1;
+ 	uint8 MATERIAL_SHADINGMODEL_THIN_TRANSLUCENT : 1;
++	uint8 MATERIAL_SHADINGMODEL_LIT_REACTIVE : 1;
+ 
+ 	uint8 TRANSLUCENCY_LIGHTING_VOLUMETRIC_NONDIRECTIONAL : 1;
+ 	uint8 TRANSLUCENCY_LIGHTING_VOLUMETRIC_DIRECTIONAL : 1;
+diff --git a/Engine/Source/Runtime/Renderer/Private/AnisotropyRendering.cpp b/Engine/Source/Runtime/Renderer/Private/AnisotropyRendering.cpp
+index 41a3c9d6a6..7e5b2e79ad 100644
+--- a/Engine/Source/Runtime/Renderer/Private/AnisotropyRendering.cpp
++++ b/Engine/Source/Runtime/Renderer/Private/AnisotropyRendering.cpp
+@@ -33,7 +33,7 @@ static bool IsAnisotropyPassCompatible(const EShaderPlatform Platform, FMaterial
+ 		!Substrate::IsSubstrateEnabled() && // Substrate renders anisotropy surface natively, without extra pass.
+ 		MaterialParameters.bHasAnisotropyConnected &&
+ 		!IsTranslucentBlendMode(MaterialParameters) &&
+-		MaterialParameters.ShadingModels.HasAnyShadingModel({ MSM_DefaultLit, MSM_ClearCoat });
++		MaterialParameters.ShadingModels.HasAnyShadingModel({ MSM_DefaultLit, MSM_ClearCoat, MSM_LitReactive });
+ }
+ 
+ class FAnisotropyVS : public FMeshMaterialShader
+@@ -138,7 +138,7 @@ bool GetAnisotropyPassShaders(
+ static bool ShouldDraw(const FMaterial& Material, bool bMaterialUsesAnisotropy)
+ {
+ 	const bool bIsNotTranslucent = IsOpaqueOrMaskedBlendMode(Material);
+-	return (bMaterialUsesAnisotropy && bIsNotTranslucent && Material.GetShadingModels().HasAnyShadingModel({ MSM_DefaultLit, MSM_ClearCoat }));
++	return (bMaterialUsesAnisotropy && bIsNotTranslucent && Material.GetShadingModels().HasAnyShadingModel({ MSM_DefaultLit, MSM_ClearCoat, MSM_LitReactive }));
+ }
+ 
+ void FAnisotropyMeshProcessor::AddMeshBatch(
+diff --git a/Engine/Source/Runtime/Renderer/Private/PrimitiveSceneInfo.cpp b/Engine/Source/Runtime/Renderer/Private/PrimitiveSceneInfo.cpp
+index 740eb26ee1..a45971563c 100644
+--- a/Engine/Source/Runtime/Renderer/Private/PrimitiveSceneInfo.cpp
++++ b/Engine/Source/Runtime/Renderer/Private/PrimitiveSceneInfo.cpp
+@@ -133,7 +133,7 @@ public:
+ 			const FMaterial& Material = Mesh.MaterialRenderProxy->GetIncompleteMaterialWithFallback(FeatureLevel);
+ 			bool bUseSkyMaterial = Material.IsSky();
+ 			bool bUseSingleLayerWaterMaterial = Material.GetShadingModels().HasShadingModel(MSM_SingleLayerWater);
+-			bool bUseAnisotropy = Material.GetShadingModels().HasAnyShadingModel({MSM_DefaultLit, MSM_ClearCoat}) && Material.MaterialUsesAnisotropy_RenderThread();
++			bool bUseAnisotropy = Material.GetShadingModels().HasAnyShadingModel({MSM_DefaultLit, MSM_ClearCoat, MSM_LitReactive}) && Material.MaterialUsesAnisotropy_RenderThread();
+ 			bool bSupportsNaniteRendering = SupportsNaniteRendering(StaticMesh->VertexFactory, PrimitiveSceneProxy, Mesh.MaterialRenderProxy, FeatureLevel);
+ 			bool bSupportsGPUScene = StaticMesh->VertexFactory->SupportsGPUScene(FeatureLevel);
+ 			bool bUseForWaterInfoTextureDepth = Mesh.bUseForWaterInfoTextureDepth;
+-- 
+2.50.1.windows.1
+
