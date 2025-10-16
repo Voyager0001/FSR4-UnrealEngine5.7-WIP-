@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -21,7 +21,7 @@
 
 #include "FFXFrameInterpolationCustomPresent.h"
 #include "RenderTargetPool.h"
-#include "FFXFSR3Settings.h"
+#include "FFXFSR4Settings.h"
 #include "GlobalShader.h"
 #include "ShaderCompilerCore.h"
 #include "PipelineStateCache.h"
@@ -106,7 +106,7 @@ public:
 
 	static const TCHAR* GetSourceFilename()
 	{
-		return TEXT("/Plugin/FSR3/Private/PostProcessFFX_FIAdditionalUI.usf");
+		return TEXT("/Plugin/FSR4/Private/PostProcessFFX_FIAdditionalUI.usf");
 	}
 
 	static const TCHAR* GetFunctionName()
@@ -122,7 +122,7 @@ private:
 	LAYOUT_FIELD(FShaderParameter, ViewSize);
 	LAYOUT_FIELD(FShaderParameter, ViewMin);
 };
-IMPLEMENT_SHADER_TYPE(, FFXFIAdditionalUICS, TEXT("/Plugin/FSR3/Private/PostProcessFFX_FIAdditionalUI.usf"), TEXT("MainCS"), SF_Compute);
+IMPLEMENT_SHADER_TYPE(, FFXFIAdditionalUICS, TEXT("/Plugin/FSR4/Private/PostProcessFFX_FIAdditionalUI.usf"), TEXT("MainCS"), SF_Compute);
 
 //------------------------------------------------------------------------------------------------------
 // Implementation for FFXFrameInterpolationResources
@@ -348,12 +348,6 @@ bool FFXFrameInterpolationCustomPresent::Present(int32& InOutSyncInterval)
 		}
 	}
 
-	int32 PaceRHIFrames = CVarFSR3PaceRHIFrames.GetValueOnAnyThread();
-	if (!bUseFFXSwapchain && (Api == EFFXBackendAPI::Unreal) && (PaceRHIFrames != 0) && bPresentRHI && !bDrawDebugView && Current.Interpolated.GetReference())
-	{
-		InOutSyncInterval = 1;
-	}
-
 	return (!bUseFFXSwapchain || bDrawDebugView || bPresentRHI);
 }
 
@@ -467,7 +461,9 @@ void FFXFrameInterpolationCustomPresent::CopyBackBufferRT(FTextureRHIRef InBackB
 					auto& FirstFrame = InterpolatedNoUI;
 					auto& SecondFrame = RealFrameNoUI;
 					auto& FirstFrameUI = Current.Interpolated;
-#if UE_VERSION_AT_LEAST(5, 3, 0)
+#if UE_VERSION_AT_LEAST(5, 6, 0)
+					auto RWSecondFrameUI = FRHICommandListExecutor::GetImmediateCommandList().CreateUnorderedAccessView(SecondFrameUI->GetRHI(), FRHIViewDesc::CreateTextureUAV().SetDimensionFromTexture(SecondFrameUI->GetRHI()));
+#elif UE_VERSION_AT_LEAST(5, 3, 0)
 					auto RWSecondFrameUI = FRHICommandListExecutor::GetImmediateCommandList().CreateUnorderedAccessView(SecondFrameUI->GetRHI());
 #elif UE_VERSION_AT_LEAST(5, 0, 0)
 					auto RWSecondFrameUI = RHICreateUnorderedAccessView(SecondFrameUI->GetRHI());

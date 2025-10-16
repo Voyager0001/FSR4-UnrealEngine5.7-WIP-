@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -34,8 +34,9 @@ public class FFXFrameInterpolation : ModuleRules
 				EngineDirectory + "/Source/Runtime/Renderer/Private",
 			}
 			);
+        PublicIncludePaths.Add(EngineDirectory + "/Source/Runtime/Renderer/Internal");
 
-		PublicDependencyModuleNames.AddRange(
+        PublicDependencyModuleNames.AddRange(
 			new string[]
 			{
 				"Engine",
@@ -57,9 +58,8 @@ public class FFXFrameInterpolation : ModuleRules
 				"SlateCore",
 				"Slate",
 				"FFXFrameInterpolationApi",
-				"FFXRHIBackend",
 				"FFXShared",
-				"FFXFSR3Settings"
+				"FFXFSR4Settings"
 			}
 			);
 

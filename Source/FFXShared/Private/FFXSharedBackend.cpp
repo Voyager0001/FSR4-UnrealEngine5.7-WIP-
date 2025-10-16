@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -113,44 +113,44 @@ FFXSHARED_API FfxApiSurfaceFormat GetFFXApiFormat(EPixelFormat UEFormat, bool bS
 	return Format;
 }
 
-FFXSHARED_API ERHIAccess GetUEAccessState(FfxResourceStates State)
+FFXSHARED_API ERHIAccess GetUEAccessState(FfxApiResourceState State)
 {
 	ERHIAccess Access = ERHIAccess::Unknown;
 
 	switch (State)
 	{
-	case FFX_RESOURCE_STATE_UNORDERED_ACCESS:
+	case FFX_API_RESOURCE_STATE_UNORDERED_ACCESS:
 		Access = ERHIAccess::UAVMask;
 		break;
-	case FFX_RESOURCE_STATE_PIXEL_READ:
+	case FFX_API_RESOURCE_STATE_PIXEL_READ:
 		Access = ERHIAccess::SRVGraphics;
 		break;
-	case FFX_RESOURCE_STATE_COMPUTE_READ:
+	case FFX_API_RESOURCE_STATE_COMPUTE_READ:
 		Access = ERHIAccess::SRVCompute;
 		break;
-	case FFX_RESOURCE_STATE_PIXEL_COMPUTE_READ:
+	case FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ:
 		Access = ERHIAccess::SRVMask;
 		break;
-	case FFX_RESOURCE_STATE_COPY_SRC:
+	case FFX_API_RESOURCE_STATE_COPY_SRC:
 		Access = ERHIAccess::CopySrc;
 		break;
-	case FFX_RESOURCE_STATE_COPY_DEST:
+	case FFX_API_RESOURCE_STATE_COPY_DEST:
 		Access = ERHIAccess::CopyDest;
 		break;
-	case FFX_RESOURCE_STATE_PRESENT:
+	case FFX_API_RESOURCE_STATE_PRESENT:
 		Access = ERHIAccess::Present;
 		break;
-	case FFX_RESOURCE_STATE_COMMON:
+	case FFX_API_RESOURCE_STATE_COMMON:
 		Access = ERHIAccess::SRVMask;
 		break;
-	case FFX_RESOURCE_STATE_GENERIC_READ:
+	case FFX_API_RESOURCE_STATE_GENERIC_READ:
 #if UE_VERSION_AT_LEAST(5, 1, 0)
 		Access = ERHIAccess::ReadOnlyExclusiveComputeMask;
 #else
 		Access = ERHIAccess::ReadOnlyExclusiveMask;
 #endif
 		break;
-	case FFX_RESOURCE_STATE_INDIRECT_ARGUMENT:
+	case FFX_API_RESOURCE_STATE_INDIRECT_ARGUMENT:
 		Access = ERHIAccess::IndirectArgs;
 		break;
 	default:

@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -24,7 +24,8 @@
 #include "FFXSharedBackend.h"
 #include "FFXFrameInterpolationSlate.h"
 #include "FFXFrameInterpolationCustomPresent.h"
-#include "FFXFSR3Settings.h"
+#include "FFXFSR4Settings.h"
+#include "FFXRDGBuilder.h"
 
 #include "PostProcess/PostProcessing.h"
 #include "PostProcess/TemporalAA.h"
@@ -50,480 +51,6 @@
 #define GET_RHI_TARGET_ARG ERenderTargetTexture::Targetable
 #define GET_RHI_VIEW_ARG ERenderTargetTexture::ShaderResource
 #define GET_TEXTURE .GetTexture()
-#endif
-
-//------------------------------------------------------------------------------------------------------
-// In order to access the distortion data prior to our code executing it is necessary to gain access to FFXFIRDGBuilder internals.
-//------------------------------------------------------------------------------------------------------
-#if UE_VERSION_AT_LEAST(5, 3, 0)
-struct FFXFIParallelPassSet : public FRHICommandListImmediate::FQueuedCommandList
-{
-	FFXFIParallelPassSet() = default;
-
-	TArray<FRDGPass*, FRDGArrayAllocator> Passes;
-#if UE_VERSION_OLDER_THAN(5, 5, 0)
-	IF_RHI_WANT_BREADCRUMB_EVENTS(FRDGBreadcrumbState* BreadcrumbStateBegin{});
-	IF_RHI_WANT_BREADCRUMB_EVENTS(FRDGBreadcrumbState* BreadcrumbStateEnd{});
-	int8 bInitialized = 0;
-#endif
-	bool bDispatchAfterExecute = false;
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-	bool bTaskModeAsync = false;
-#else
-	bool bParallelTranslate = false;
-#endif
-};
-#endif
-
-
-#if UE_VERSION_AT_LEAST(5, 1, 0)
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-class FFXFIRDGBuilder : FRDGScopeState
-#elif UE_VERSION_AT_LEAST(5, 4, 0)
-class FFXFIRDGBuilder
-#else
-class FFXFIRDGBuilder : FRDGAllocatorScope
-#endif
-{
-#if UE_VERSION_AT_LEAST(5, 4, 0)
-	struct FAsyncDeleter
-	{
-		TUniqueFunction<void()> Function;
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-		UE::Tasks::FTask Prerequisites;
-#endif
-		//static UE::Tasks::FTask LastTask;
-
-		RENDERCORE_API ~FAsyncDeleter()
-		{
-		}
-	} AsyncDeleter;
-
-	struct
-	{
-		FRDGAllocator Root;
-		FRDGAllocator Task;
-		FRDGAllocator Transition;
-
-		int32 GetByteCount() const
-		{
-			return Root.GetByteCount() + Task.GetByteCount() + Transition.GetByteCount();
-		}
-
-	} Allocators;
-
-	FRDGAllocatorScope RootAllocatorScope;
-#endif
-
-public:
-	FFXFIRDGBuilder(FRHICommandListImmediate& InRHICmdList, FRDGEventName InName = {}, ERDGBuilderFlags InFlags = ERDGBuilderFlags::None)
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-		: FRDGScopeState(InRHICmdList, true, true)
-		, RootAllocatorScope(Allocators.Transition)
-#elif UE_VERSION_AT_LEAST(5, 4, 0)
-		: RootAllocatorScope(Allocators.Transition)
-		, RHICmdList(InRHICmdList)
-#else
-		: RHICmdList(InRHICmdList)
-#endif
-		, BuilderName(InName)
-#if UE_VERSION_OLDER_THAN(5, 4, 0)
-		, CompilePipe(TEXT("FFXFIRDGCompilePipe"))
-#if RDG_CPU_SCOPES
-
-		, CPUScopeStacks(Allocator)
-#endif
-		, GPUScopeStacks(Allocator)
-#endif
-#if UE_VERSION_AT_LEAST(5, 4, 0)
-		, ExtendResourceLifetimeScope(InRHICmdList)
-#endif
-#if RDG_ENABLE_DEBUG
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-		, UserValidation(Allocators.Transition)
-#elif UE_VERSION_AT_LEAST(5, 4, 0)
-		, UserValidation(Allocators.Transition, false)
-#else
-		, UserValidation(Allocator, bParallelExecuteEnabled)
-#endif
-		, BarrierValidation(&Passes, BuilderName)
-#endif
-#if UE_VERSION_AT_LEAST(5, 2, 0) && UE_VERSION_OLDER_THAN(5, 4, 0)
-		, ExtendResourceLifetimeScope(InRHICmdList)
-#endif
-	{
-	}
-
-	FFXFIRDGBuilder(const FFXFIRDGBuilder&) = delete;
-	~FFXFIRDGBuilder()
-	{
-	}
-
-#if UE_VERSION_OLDER_THAN(5, 5, 0)
-	FRHICommandListImmediate& RHICmdList;
-#endif
-	struct FFXFSR3BlackBoard
-	{
-		FRDGAllocator* Allocator;
-		TArray<struct FStruct*, FRDGArrayAllocator> Blackboard;
-	};
-	FFXFSR3BlackBoard Blackboard;
-
-	FRDGTextureRef FindTexture(TCHAR const* Name)
-	{
-		for (FRDGTextureHandle It = Textures.Begin(); It != Textures.End(); ++It)
-		{
-			FRDGTextureRef Texture = Textures.Get(It);
-			if (FCString::Strcmp(Texture->Name, Name) == 0)
-			{
-				return Texture;
-			}
-		}
-		return nullptr;
-	}
-
-private:
-	const FRDGEventName BuilderName;
-#if UE_VERSION_AT_LEAST(5, 4, 0)
-	FRDGPass* ProloguePass = nullptr;
-	FRDGPass* EpiloguePass = nullptr;
-	uint32 AsyncComputePassCount = 0;
-	uint32 RasterPassCount = 0;
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-	TArray<FRDGDispatchPass*, FRDGArrayAllocator> DispatchPasses;
-#else
-	EAsyncComputeBudget AsyncComputeBudgetScope = EAsyncComputeBudget::EAll_4;
-	EAsyncComputeBudget AsyncComputeBudgetState = EAsyncComputeBudget(~0u);
-	IF_RDG_CMDLIST_STATS(TStatId CommandListStatScope);
-	IF_RDG_CMDLIST_STATS(TStatId CommandListStatState);
-	IF_RDG_CPU_SCOPES(FRDGCPUScopeStacks CPUScopeStacks);
-	FRDGGPUScopeStacksByPipeline GPUScopeStacks;
-	IF_RHI_WANT_BREADCRUMB_EVENTS(FRDGBreadcrumbState* BreadcrumbState{});
-#endif
-	FRDGPassRegistry Passes;
-	FRDGTextureRegistry Textures;
-	FRDGBufferRegistry Buffers;
-	FRDGViewRegistry Views;
-	FRDGUniformBufferRegistry UniformBuffers;
-
-	struct FExtractedTexture
-	{
-		FRDGTexture* Texture{};
-		TRefCountPtr<IPooledRenderTarget>* PooledTexture{};
-	};
-
-	TArray<FExtractedTexture, FRDGArrayAllocator> ExtractedTextures;
-
-	struct FExtractedBuffer
-	{
-		FRDGBuffer* Buffer{};
-		TRefCountPtr<FRDGPooledBuffer>* PooledBuffer{};
-	};
-
-	TArray<FExtractedBuffer, FRDGArrayAllocator> ExtractedBuffers;
-
-	Experimental::TRobinHoodHashMap<FRHITexture*, FRDGTexture*, DefaultKeyFuncs<FRHITexture*>, FRDGArrayAllocator> ExternalTextures;
-	Experimental::TRobinHoodHashMap<FRHIBuffer*, FRDGBuffer*, DefaultKeyFuncs<FRHIBuffer*>, FRDGArrayAllocator> ExternalBuffers;
-
-	TArray<FRDGBuffer*, FRDGArrayAllocator> NumElementsCallbackBuffers;
-
-	IRHITransientResourceAllocator* TransientResourceAllocator = nullptr;
-	bool bSupportsTransientTextures = false;
-	bool bSupportsTransientBuffers = false;
-
-	Experimental::TRobinHoodHashMap<FRDGPooledTexture*, FRDGTexture*, DefaultKeyFuncs<FRDGPooledTexture*>, FConcurrentLinearArrayAllocator> PooledTextureOwnershipMap;
-	Experimental::TRobinHoodHashMap<FRDGPooledBuffer*, FRDGBuffer*, DefaultKeyFuncs<FRDGPooledBuffer*>, FConcurrentLinearArrayAllocator> PooledBufferOwnershipMap;
-
-	TMap<FRDGBarrierBatchBeginId, FRDGBarrierBatchBegin*, FRDGSetAllocator> BarrierBatchMap;
-	TArray<FRHITrackedAccessInfo, FRDGArrayAllocator> EpilogueResourceAccesses;
-	TArray<TRefCountPtr<IPooledRenderTarget>, FRDGArrayAllocator> ActivePooledTextures;
-	TArray<TRefCountPtr<FRDGPooledBuffer>, FRDGArrayAllocator> ActivePooledBuffers;
-	FRDGTransitionCreateQueue TransitionCreateQueue;
-	FRDGTextureSubresourceState ScratchTextureState;
-	FRDGSubresourceState PrologueSubresourceState;
-
-	struct FAsyncSetupOp
-	{
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-		enum class EType : uint8
-		{
-			SetupPassResources,
-			CullRootBuffer,
-			CullRootTexture,
-			ReservedBufferCommit
-		};
-#else
-		enum class EType
-		{
-			SetupPassResources,
-			CullRootBuffer,
-			CullRootTexture
-		};
-#endif
-
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-		uint64 Type : 8;
-		uint64 Payload : 48;
-#else
-		EType Type;
-#endif
-
-		union
-		{
-			FRDGPass* Pass;
-			FRDGBuffer* Buffer;
-			FRDGTexture* Texture;
-		};
-	};
-
-	struct FAsyncSetupQueue
-	{
-		UE::FMutex Mutex;
-		TArray<FAsyncSetupOp, FRDGArrayAllocator> Ops;
-#if UE_VERSION_OLDER_THAN(5, 5, 0)
-		UE::Tasks::FTask LastTask;
-#endif
-		UE::Tasks::FPipe Pipe{ TEXT("FRDGBuilder::AsyncSetupQueue") };
-
-	} AsyncSetupQueue;
-
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-	TArray<uint64, FRDGArrayAllocator> ReservedBufferCommitSizes;
-#endif
-
-	TArray<FRDGPass*, FRDGArrayAllocator> CullPassStack;
-
-	struct
-	{
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-		TStaticArray<TArray<UE::Tasks::FTask, FRDGArrayAllocator>, (int32)ERDGSetupTaskWaitPoint::MAX> Tasks;
-#else
-		TArray<UE::Tasks::FTask, FRDGArrayAllocator> Tasks;
-		TArray<FRHICommandListImmediate::FQueuedCommandList, FConcurrentLinearArrayAllocator> CommandLists;
-#endif
-		bool bEnabled = false;
-
-	} ParallelSetup;
-
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-	bool bParallelCompileEnabled = false;
-#endif
-
-	struct
-	{
-		TArray<FFXFIParallelPassSet, FRDGArrayAllocator> ParallelPassSets;
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-		TOptional<UE::Tasks::FTaskEvent> TasksAwait;
-		TOptional<UE::Tasks::FTaskEvent> TasksAsync;
-		TOptional<UE::Tasks::FTaskEvent> DispatchTaskEventAwait;
-		TOptional<UE::Tasks::FTaskEvent> DispatchTaskEventAsync;
-		ERDGPassTaskMode TaskMode = ERDGPassTaskMode::Inline;
-#else
-		TArray<UE::Tasks::FTask, FRDGArrayAllocator> Tasks;
-		TOptional<UE::Tasks::FTaskEvent> DispatchTaskEvent;
-		bool bEnabled = false;
-#endif
-	} ParallelExecute;
-
-	struct FUploadedBuffer
-	{
-		bool bUseDataCallbacks;
-		bool bUseFreeCallbacks;
-		FRDGBuffer* Buffer{};
-		const void* Data{};
-		uint64 DataSize{};
-		FRDGBufferInitialDataCallback DataCallback;
-		FRDGBufferInitialDataSizeCallback DataSizeCallback;
-		FRDGBufferInitialDataFreeCallback DataFreeCallback;
-		FRDGBufferInitialDataFillCallback DataFillCallback;
-	};
-
-	TArray<FUploadedBuffer, FRDGArrayAllocator> UploadedBuffers;
-
-	TArray<FRDGViewableResource*, FRDGArrayAllocator> AccessModeQueue;
-	TSet<FRDGViewableResource*, DefaultKeyFuncs<FRDGViewableResource*>, FRDGSetAllocator> ExternalAccessResources;
-
-#if UE_VERSION_AT_LEAST(5, 5, 0)
-	TArray<TUniqueFunction<void()>, FRDGArrayAllocator> PostExecuteCallbacks;
-
-	FGraphEventArray WaitOutstandingTasks;
-#endif
-	bool bFlushResourcesRHI = false;
-	FRHICommandListScopedExtendResourceLifetime ExtendResourceLifetimeScope;
-
-	struct FAuxiliaryPass
-	{
-		uint8 Clobber = 0;
-		uint8 Visualize = 0;
-		uint8 Dump = 0;
-		uint8 FlushAccessModeQueue = 0;
-	} AuxiliaryPasses;
-
-#if UE_VERSION_AT_LEAST(5, 5, 0) && WITH_MGPU
-	bool bForceCopyCrossGPU = false;
-#endif
-
-	IF_RDG_ENABLE_TRACE(FRDGTrace Trace);
-
-#if RDG_ENABLE_DEBUG
-	FRDGUserValidation UserValidation;
-	FRDGBarrierValidation BarrierValidation;
-#endif
-
-#else // 5.0.3 or older
-	FRDGPassRegistry Passes;
-	FRDGTextureRegistry Textures;
-	FRDGBufferRegistry Buffers;
-	FRDGViewRegistry Views;
-	FRDGUniformBufferRegistry UniformBuffers;
-	TArray<FRDGUniformBufferHandle, FRDGArrayAllocator> UniformBuffersToCreate;
-	TSortedMap<FRHITexture*, FRDGTexture*, FRDGArrayAllocator> ExternalTextures;
-	TSortedMap<FRHIBuffer*, FRDGBuffer*, FRDGArrayAllocator> ExternalBuffers;
-	TMap<FRDGPooledTexture*, FRDGTexture*, FRDGSetAllocator> PooledTextureOwnershipMap;
-	TMap<FRDGPooledBuffer*, FRDGBuffer*, FRDGSetAllocator> PooledBufferOwnershipMap;
-	TArray<TRefCountPtr<IPooledRenderTarget>, FRDGArrayAllocator> ActivePooledTextures;
-	TArray<TRefCountPtr<FRDGPooledBuffer>, FRDGArrayAllocator> ActivePooledBuffers;
-	TMap<FRDGBarrierBatchBeginId, FRDGBarrierBatchBegin*, FRDGSetAllocator> BarrierBatchMap;
-	FRDGTransitionCreateQueue TransitionCreateQueue;
-
-	template <typename LambdaType>
-	UE::Tasks::FTask LaunchCompileTask(const TCHAR* Name, bool bCondition, LambdaType&& Lambda);
-
-	UE::Tasks::FPipe CompilePipe;
-
-	class FPassQueue
-	{
-		TLockFreePointerListFIFO<FRDGPass, PLATFORM_CACHE_LINE_SIZE> Queue;
-		UE::Tasks::FTask LastTask;
-	};
-
-	FPassQueue SetupPassQueue;
-
-	TArray<FRDGPassHandle, FRDGArrayAllocator> CullPassStack;
-
-	FRDGPass* ProloguePass;
-	FRDGPass* EpiloguePass;
-
-	struct FExtractedTexture
-	{
-		FRDGTexture* Texture{};
-		TRefCountPtr<IPooledRenderTarget>* PooledTexture{};
-	};
-
-	TArray<FExtractedTexture, FRDGArrayAllocator> ExtractedTextures;
-
-	struct FExtractedBuffer
-	{
-		FRDGBuffer* Buffer{};
-		TRefCountPtr<FRDGPooledBuffer>* PooledBuffer{};
-	};
-
-	TArray<FExtractedBuffer, FRDGArrayAllocator> ExtractedBuffers;
-
-	struct FUploadedBuffer
-	{
-		bool bUseDataCallbacks;
-		bool bUseFreeCallbacks;
-		FRDGBuffer* Buffer{};
-		const void* Data{};
-		uint64 DataSize{};
-		FRDGBufferInitialDataCallback DataCallback;
-		FRDGBufferInitialDataSizeCallback DataSizeCallback;
-		FRDGBufferInitialDataFreeCallback DataFreeCallback;
-	};
-
-	TArray<FUploadedBuffer, FRDGArrayAllocator> UploadedBuffers;
-
-#if UE_VERSION_OLDER_THAN(5, 3, 0)
-	struct FParallelPassSet : public FRHICommandListImmediate::FQueuedCommandList
-	{
-		TArray<FRDGPass*, FRDGArrayAllocator> Passes;
-		IF_RHI_WANT_BREADCRUMB_EVENTS(FRDGBreadcrumbState* BreadcrumbStateBegin{});
-		IF_RHI_WANT_BREADCRUMB_EVENTS(FRDGBreadcrumbState* BreadcrumbStateEnd{});
-		int8 bInitialized;
-		bool bDispatchAfterExecute;
-#if UE_VERSION_AT_LEAST(5, 2, 0)
-		bool bParallelTranslate;
-#endif
-	};
-#endif
-
-#if UE_VERSION_AT_LEAST(5, 3, 0)
-	TArray<FFXFIParallelPassSet, FRDGArrayAllocator> ParallelPassSets;
-#else
-	TArray<FParallelPassSet, FRDGArrayAllocator> ParallelPassSets;
-#endif
-
-	TArray<UE::Tasks::FTask, FRDGArrayAllocator> ParallelExecuteEvents;
-
-	TArray<UE::Tasks::FTask, FRDGArrayAllocator> ParallelSetupEvents;
-
-	TArray<FRHITrackedAccessInfo, FRDGArrayAllocator> EpilogueResourceAccesses;
-
-	TArray<FRDGViewableResource*, FRDGArrayAllocator> AccessModeQueue;
-	TSet<FRDGViewableResource*, DefaultKeyFuncs<FRDGViewableResource*>, FRDGSetAllocator> ExternalAccessResources;
-
-	FRDGTextureSubresourceStateIndirect ScratchTextureState;
-
-	EAsyncComputeBudget AsyncComputeBudgetScope;
-	EAsyncComputeBudget AsyncComputeBudgetState;
-
-	FRHICommandList* RHICmdListBufferUploads;
-
-	IF_RDG_CPU_SCOPES(FRDGCPUScopeStacks CPUScopeStacks);
-	FRDGGPUScopeStacksByPipeline GPUScopeStacks;
-	IF_RHI_WANT_BREADCRUMB_EVENTS(FRDGBreadcrumbState* BreadcrumbState{});
-
-	IF_RDG_ENABLE_TRACE(FRDGTrace Trace);
-
-	bool bFlushResourcesRHI;
-	bool bParallelExecuteEnabled;
-	bool bParallelSetupEnabled;
-#if UE_VERSION_AT_LEAST(5, 2, 0)
-	bool bFinalEventScopeActive;
-#endif
-
-#if RDG_ENABLE_DEBUG
-	FRDGUserValidation UserValidation;
-	FRDGBarrierValidation BarrierValidation;
-#endif
-
-	struct FAuxiliaryPass
-	{
-		uint8 Clobber;
-		uint8 Visualize;
-		uint8 Dump;
-		uint8 FlushAccessModeQueue;
-	} AuxiliaryPasses;
-
-#if WITH_MGPU
-#if UE_VERSION_OLDER_THAN(5, 2, 0)
-	FName NameForTemporalEffect;
-	bool bWaitedForTemporalEffect;
-#endif
-	bool bForceCopyCrossGPU;
-#endif // WITH_MGPU
-
-	uint32 AsyncComputePassCount;
-	uint32 RasterPassCount;
-
-	IF_RDG_CMDLIST_STATS(TStatId CommandListStatScope);
-	IF_RDG_CMDLIST_STATS(TStatId CommandListStatState);
-
-	IRHITransientResourceAllocator* TransientResourceAllocator;
-
-#if UE_VERSION_AT_LEAST(5, 2, 0)
-	FRHICommandListScopedExtendResourceLifetime ExtendResourceLifetimeScope;
-#endif
-
-#endif
-};
-static_assert(sizeof(FRDGBuilder) == sizeof(FFXFIRDGBuilder), "FFXFIRDGBuilder must match the layout of FRDGBuilder so we can access the Lumen reflection texture!");
-
-#if UE_VERSION_AT_LEAST(5, 6, 0)
-#error "Unsupported Unreal Engine 5 version - update the definition for FFXFIRDGBuilder."
-#endif
-
 #endif
 
 //------------------------------------------------------------------------------------------------------
@@ -591,7 +118,7 @@ public:
 		OutEnvironment.SetDefine(TEXT("UNREAL_ENGINE_MINOR_VERSION"), ENGINE_MINOR_VERSION);
 	}
 };
-IMPLEMENT_GLOBAL_SHADER(FFXFIConvertVelocityCS, "/Plugin/FSR3/Private/PostProcessFFX_FSR3ConvertVelocity.usf", "MainCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FFXFIConvertVelocityCS, "/Plugin/FSR4/Private/PostProcessFFX_FSR4ConvertVelocity.usf", "MainCS", SF_Compute);
 
 //------------------------------------------------------------------------------------------------------
 // Unreal shader to convert from the Distortion texture format for use by FFX.
@@ -624,7 +151,7 @@ public:
 		OutEnvironment.SetDefine(TEXT("COMPUTE_SHADER"), 1);
 	}
 };
-IMPLEMENT_GLOBAL_SHADER(FFXFIConvertDistortionCS, "/Plugin/FSR3/Private/PostProcessFFX_FIConvertDistortion.usf", "MainCS", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FFXFIConvertDistortionCS, "/Plugin/FSR4/Private/PostProcessFFX_FIConvertDistortion.usf", "MainCS", SF_Compute);
 
 #if UE_VERSION_OLDER_THAN(5, 1, 0)
 inline void TransitionAndCopyTexture(FRHICommandList& RHICmdList, FRHITexture* SrcTexture, FRHITexture* DstTexture, const FRHICopyTextureInfo& Info)
@@ -738,14 +265,6 @@ void FFXFrameInterpolation::OnBeginDrawHandler()
 		{
 			(*PresentHandler)->InitViewport(GEngine->GameViewport->Viewport, GEngine->GameViewport->Viewport->GetViewportRHI());
 		}
-		else if ((CVarFSR3UseRHI.GetValueOnAnyThread() != 0) || FParse::Param(FCommandLine::Get(), TEXT("fsr3rhi")))
-		{
-			IFFXSharedBackendModule* RHIBackendModule = FModuleManager::GetModulePtr<IFFXSharedBackendModule>(TEXT("FFXRHIBackend"));
-			check(RHIBackendModule);
-
-			auto* RHIBackend = RHIBackendModule->GetBackend();
-			RHIBackend->Init();
-		}
 	}
 }
 
@@ -781,8 +300,8 @@ void FFXFrameInterpolation::OnPostEngineInit()
 		// Has to be used by all backends as otherwise we end up waiting on DrawBuffers.
 		{
 			FSlateApplicationBase& BaseApp = static_cast<FSlateApplicationBase&>(App);
-			FFXFISlateApplicationAccessor& Accessor = (FFXFISlateApplicationAccessor&)BaseApp;
-			TSharedPtr<FSlateRenderer>* Ptr = &Accessor.Renderer;
+			FFXSlateApplication& Accessor = (FFXSlateApplication&)BaseApp;
+			TSharedPtr<FSlateRenderer>* Ptr = Accessor.GetRendererRef();
 			auto SharedRef = Ptr->ToSharedRef();
 			TSharedRef<FFXFrameInterpolationSlateRenderer> RendererWrapper = MakeShared<FFXFrameInterpolationSlateRenderer>(SharedRef);
 			App.InitializeRenderer(RendererWrapper, true);
@@ -834,7 +353,7 @@ void FFXFrameInterpolation::SetupView(const FSceneView& InView, const FPostProce
 #endif
 		View.TemporalJitterPixels = ((FViewInfo const&)InView).TemporalJitterPixels;
 #if UE_VERSION_AT_LEAST(5, 0, 0)
-		if (View.bEnabled && (InView.GetFeatureLevel() >= ERHIFeatureLevel::SM6))
+		if (View.bEnabled)
 		{
 			View.GameTimeMs = InView.Family->Time.GetDeltaWorldTimeSeconds();
 			GameDeltaTime = InView.Family->Time.GetDeltaWorldTimeSeconds();
@@ -917,7 +436,7 @@ bool FFXFrameInterpolation::InterpolateView(FRDGBuilder& GraphBuilder, FFXFrameI
 	FIntRect ViewRect = ViewDesc.ViewRect;
 	FIntPoint InputExtents = ViewDesc.ViewRect.Size();
 	FIntPoint InputExtentsQuantized = ViewDesc.InputExtentsQuantized;
-	FIntPoint InputTextureExtents = CVarFSR3QuantizeInternalTextures.GetValueOnRenderThread() ? InputExtentsQuantized : InputExtents;
+	FIntPoint InputTextureExtents = CVarFSR4QuantizeInternalTextures.GetValueOnRenderThread() ? InputExtentsQuantized : InputExtents;
 	FIntPoint OutputExtents = ((FViewInfo*)View)->UnscaledViewRect.Size();
 	FIntPoint OutputPoint = ((FViewInfo*)View)->UnscaledViewRect.Min;
 	float CameraNear = ViewDesc.CameraNear;
@@ -962,6 +481,18 @@ bool FFXFrameInterpolation::InterpolateView(FRDGBuilder& GraphBuilder, FFXFrameI
 	UpscalerDesc.motionVectorScale.x = InputExtents.X;
 	UpscalerDesc.motionVectorScale.y = InputExtents.Y;
 
+	ffxDispatchDescFrameGenerationPrepareCameraInfo CameraInfoDesc;
+	FMemory::Memzero(CameraInfoDesc);
+	CameraInfoDesc.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_CAMERAINFO;
+	const FVector3f ViewLocation = FVector3f(View->ViewLocation);
+	const FVector3f ViewUp = FVector3f(View->GetViewUp());
+	const FVector3f ViewForward = FVector3f(View->GetViewDirection());
+	const FVector3f ViewRight = FVector3f(View->GetViewRight());
+	FMemory::Memcpy(CameraInfoDesc.cameraPosition, &ViewLocation, sizeof(CameraInfoDesc.cameraPosition));
+	FMemory::Memcpy(CameraInfoDesc.cameraUp, &ViewUp, sizeof(CameraInfoDesc.cameraUp));
+	FMemory::Memcpy(CameraInfoDesc.cameraForward, &ViewForward, sizeof(CameraInfoDesc.cameraForward));
+	FMemory::Memcpy(CameraInfoDesc.cameraRight, &ViewRight, sizeof(CameraInfoDesc.cameraRight));
+
 	FIntPoint MaxRenderSize = ((FViewInfo*)View)->GetSecondaryViewRectSize();
 
 	ffxCreateContextDescFrameGeneration FgDesc;
@@ -974,7 +505,10 @@ bool FFXFrameInterpolation::InterpolateView(FRDGBuilder& GraphBuilder, FFXFrameI
 	FgDesc.maxRenderSize.height = MaxRenderSize.Y;
 	FgDesc.flags |= (bool(ERHIZBuffer::IsInverted)) ? FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED : 0;
 	FgDesc.flags |= FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE | FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE;
-	FgDesc.flags |= CVarFSR3AllowAsyncWorkloads.GetValueOnAnyThread() ? FFX_FRAMEGENERATION_ENABLE_ASYNC_WORKLOAD_SUPPORT : 0;
+	FgDesc.flags |= CVarFSR4AllowAsyncWorkloads.GetValueOnAnyThread() ? FFX_FRAMEGENERATION_ENABLE_ASYNC_WORKLOAD_SUPPORT : 0;
+#if (UE_BUILD_DEBUG || UE_BUILD_DEVELOPMENT || UE_BUILD_TEST)
+	FgDesc.flags |= FFX_FRAMEGENERATION_ENABLE_DEBUG_CHECKING;
+#endif
 
 	FRDGTextureRef ColorBuffer = FinalBuffer;
 	FRDGTextureRef InterBuffer = InterpolatedRDG;
@@ -1033,7 +567,7 @@ bool FFXFrameInterpolation::InterpolateView(FRDGBuilder& GraphBuilder, FFXFrameI
 	FRDGTextureRef DistortionTexture = nullptr;
 #if UE_VERSION_AT_LEAST(5, 1, 0)
 	if (CVarFFXFIUseDistortionTexture.GetValueOnRenderThread()) {
-		FFXFIRDGBuilder& GraphBulderAccessor = (FFXFIRDGBuilder&)GraphBuilder;
+		FFXRDGBuilder& GraphBulderAccessor = (FFXRDGBuilder&)GraphBuilder;
 		FRDGTextureRef UEDistortionTexture = GraphBulderAccessor.FindTexture(TEXT("Distortion"));
 
 		if (HasBeenProduced(UEDistortionTexture)) {
@@ -1076,11 +610,6 @@ bool FFXFrameInterpolation::InterpolateView(FRDGBuilder& GraphBuilder, FFXFrameI
 				true));
 			GRenderTargetPool.FindFreeElement(GraphBuilder.RHICmdList, Desc, Context->Color, TEXT("FIColor"));
 			GRenderTargetPool.FindFreeElement(GraphBuilder.RHICmdList, Desc, Context->Inter, TEXT("FIInter"));
-
-			if ((Presenter->GetBackend()->GetAPI() != EFFXBackendAPI::Unreal) && (Presenter->GetMode() == EFFXFrameInterpolationPresentModeNative))
-			{
-				GRenderTargetPool.FindFreeElement(GraphBuilder.RHICmdList, Desc, Context->Hud, TEXT("FIHud"));
-			}
 		}
 
 		FRHICopyTextureInfo CopyInfo;
@@ -1090,12 +619,6 @@ bool FFXFrameInterpolation::InterpolateView(FRDGBuilder& GraphBuilder, FFXFrameI
 		CopyInfo.Size.X = FMath::Min((uint32)Context->Desc.displaySize.width, (uint32)FinalBuffer->Desc.Extent.X);
 		CopyInfo.Size.Y = FMath::Min((uint32)Context->Desc.displaySize.height, (uint32)FinalBuffer->Desc.Extent.Y);
 		AddCopyTexturePass(GraphBuilder, FinalBuffer, ColorBuffer, CopyInfo);
-
-		if ((Presenter->GetBackend()->GetAPI() != EFFXBackendAPI::Unreal) && (Presenter->GetMode() == EFFXFrameInterpolationPresentModeNative))
-		{
-			HudBuffer = GraphBuilder.RegisterExternalTexture(Context->Hud);
-			AddCopyTexturePass(GraphBuilder, BackBufferRDG, HudBuffer, CopyInfo);
-		}
 
 		InterBuffer = GraphBuilder.RegisterExternalTexture(Context->Inter);
 
@@ -1156,14 +679,14 @@ bool FFXFrameInterpolation::InterpolateView(FRDGBuilder& GraphBuilder, FFXFrameI
 	}
 
 	auto DisplaySize = ColorBuffer->Desc.Extent;
-	bool const bOverrideSwapChain = ((CVarFSR3OverrideSwapChainDX12.GetValueOnAnyThread() != 0) || FParse::Param(FCommandLine::Get(), TEXT("fsr3swapchain")));
+	bool const bOverrideSwapChain = ((CVarFSR4OverrideSwapChainDX12.GetValueOnAnyThread() != 0) || FParse::Param(FCommandLine::Get(), TEXT("fsr4swapchain")));
 
 	ffxConfigureDescFrameGeneration ConfigDesc;
 	FMemory::Memzero(ConfigDesc);
 	ConfigDesc.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
 	ConfigDesc.swapChain = Presenter->GetBackend()->GetSwapchain(ViewportRHI->GetNativeSwapChain());
 	ConfigDesc.frameGenerationEnabled = true;
-	ConfigDesc.allowAsyncWorkloads = (CVarFSR3AllowAsyncWorkloads.GetValueOnAnyThread() != 0);
+	ConfigDesc.allowAsyncWorkloads = (CVarFSR4AllowAsyncWorkloads.GetValueOnAnyThread() != 0);
 	ConfigDesc.generationRect = interpolateParams->generationRect;
 	ConfigDesc.frameID = interpolateParams->frameID;
 	ConfigDesc.flags |= bOverrideSwapChain ? 0 : FFX_FRAMEGENERATION_FLAG_NO_SWAPCHAIN_CONTEXT_NOTIFY;
@@ -1172,95 +695,7 @@ bool FFXFrameInterpolation::InterpolateView(FRDGBuilder& GraphBuilder, FFXFrameI
 	ConfigDesc.flags |= CVarFFXFIShowDebugView.GetValueOnAnyThread() ? FFX_FRAMEGENERATION_FLAG_DRAW_DEBUG_VIEW : 0;
 #endif
 
-	if (Presenter->GetBackend()->GetAPI() == EFFXBackendAPI::Unreal)
-	{
-		bInterpolated = true;
-		interpolateParams->presentColor = Presenter->GetBackend()->GetNativeResource(PassParameters->ColorTexture GET_TEXTURE, FFX_API_RESOURCE_STATE_COPY_DEST);
-
-		Presenter->GetBackend()->SetFeatureLevel(&Context->Context, View->GetFeatureLevel());
-
-
-		if (!HasBeenProduced(DistortionTexture)) {
-			DistortionTexture = GraphBuilder.RegisterExternalTexture(GSystemTextures.BlackDummy);
-		}
-		PassParameters->DistortionTexture = DistortionTexture;
-
-		GraphBuilder.AddPass(RDG_EVENT_NAME("FidelityFX-FrameInterpolation"), PassParameters, ERDGPassFlags::Compute | ERDGPassFlags::NeverCull | ERDGPassFlags::Copy, [Presenter, PassParameters, Context, ConfigDesc](FRHICommandListImmediate& RHICmdList)
-		{
-			PassParameters->ColorTexture->MarkResourceAsUsed();
-			PassParameters->InterpolatedRT->MarkResourceAsUsed();
-			PassParameters->SceneDepth->MarkResourceAsUsed();
-			PassParameters->MotionVectors->MarkResourceAsUsed();
-			PassParameters->DistortionTexture->MarkResourceAsUsed();
-			Context->Distortion = PassParameters->DistortionTexture->GetRHI();
-
-			Presenter->SetCustomPresentStatus(FFXFrameInterpolationCustomPresentStatus::InterpolateRT);
-			RHICmdList.EnqueueLambda([Presenter, Context, ConfigDesc](FRHICommandListImmediate& cmd) mutable
-			{
-				if (Context->Distortion.IsValid())
-				{
-					ffxConfigureDescFrameGenerationRegisterDistortionFieldResource DistortionDesc;
-					DistortionDesc.header.pNext = nullptr;
-					DistortionDesc.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION_REGISTERDISTORTIONRESOURCE;
-					DistortionDesc.distortionField = Presenter->GetBackend()->GetNativeResource(Context->Distortion, FFX_API_RESOURCE_STATE_PIXEL_READ);
-					Presenter->GetBackend()->UpdateSwapChain(&Context->Context, ConfigDesc, DistortionDesc);
-				}
-				else
-				{
-					Presenter->GetBackend()->UpdateSwapChain(&Context->Context, ConfigDesc);
-				}
-
-				Presenter->SetCustomPresentStatus(FFXFrameInterpolationCustomPresentStatus::InterpolateRHI);
-			});
-		});
-
-
-		// Interpolate the frame
-		{
-			interpolateParams->commandList = (void*)&GraphBuilder;
-			interpolateParams->outputs[0] = Presenter->GetBackend()->GetNativeResource(PassParameters->InterpolatedRT GET_TEXTURE, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
-
-			UpscalerDesc.commandList = interpolateParams->commandList;
-			UpscalerDesc.depth = Presenter->GetBackend()->GetNativeResource(PassParameters->SceneDepth GET_TEXTURE, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-			UpscalerDesc.motionVectors = Presenter->GetBackend()->GetNativeResource(PassParameters->MotionVectors GET_TEXTURE, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
-
-			auto Code = Presenter->GetBackend()->ffxDispatch(&Context->Context, &UpscalerDesc.header);
-			check(Code == FFX_API_RETURN_OK);
-
-			Code = Presenter->GetBackend()->ffxDispatch(&Context->Context, &interpolateParams->header);
-			check(Code == FFX_API_RETURN_OK);
-
-			Info.Size.X = DisplaySize.X;
-			Info.Size.Y = DisplaySize.Y;
-			if (PassParameters->Interpolated != PassParameters->InterpolatedRT)
-			{
-				Info.DestPosition.X = OutputPoint.X;
-				Info.DestPosition.Y = OutputPoint.Y;
-				Info.Size.X = FMath::Min((uint32)DisplaySize.X, (uint32)PassParameters->Interpolated->Desc.Extent.X);
-				Info.Size.Y = FMath::Min((uint32)DisplaySize.Y, (uint32)PassParameters->Interpolated->Desc.Extent.Y);
-#if UE_VERSION_AT_LEAST(5, 0, 0)
-				AddCopyTexturePass(GraphBuilder, PassParameters->InterpolatedRT, PassParameters->Interpolated, Info);
-				AddCopyTexturePass(GraphBuilder, PassParameters->InterpolatedRT, BackBufferRDG, Info);
-#else
-				AddCopyTexturePass(GraphBuilder, PassParameters->InterpolatedRT.GetTexture(), PassParameters->Interpolated.GetTexture(), Info);
-				AddCopyTexturePass(GraphBuilder, PassParameters->InterpolatedRT.GetTexture(), BackBufferRDG, Info);
-#endif
-			}
-			else
-			{
-				check(Info.Size.X == BackBufferRDG->Desc.Extent.X && Info.Size.Y == BackBufferRDG->Desc.Extent.Y);
-				check(Info.Size.X == PassParameters->InterpolatedRT->Desc.Extent.X && Info.Size.Y == PassParameters->InterpolatedRT->Desc.Extent.Y);
-#if UE_VERSION_AT_LEAST(5, 0, 0)
-				AddCopyTexturePass(GraphBuilder, PassParameters->InterpolatedRT, BackBufferRDG, Info);
-#else
-				AddCopyTexturePass(GraphBuilder, PassParameters->InterpolatedRT.GetTexture(), BackBufferRDG, Info);
-#endif
-			}
-
-			delete interpolateParams;
-		}
-	}
-	else if (!bResized)
+	if (!bResized)
 	{
 		bInterpolated = true;
 
@@ -1268,7 +703,7 @@ bool FFXFrameInterpolation::InterpolateView(FRDGBuilder& GraphBuilder, FFXFrameI
 			PassParameters->DistortionTexture = DistortionTexture;
 		}
 
-		GraphBuilder.AddPass(RDG_EVENT_NAME("FidelityFX-FrameInterpolation"), PassParameters, ERDGPassFlags::Compute | ERDGPassFlags::NeverCull | ERDGPassFlags::Copy, [InterpolateIndex, UpscalerDesc, ConfigDesc, OutputExtents, OutputPoint, ViewportRHI, Presenter, Context, PassParameters, interpolateParams, DeltaTimeMs, Engine, ViewportOutputFormat, GHDRMinLuminnanceLog10, GHDRMaxLuminnance](FRHICommandListImmediate& RHICmdList)
+		GraphBuilder.AddPass(RDG_EVENT_NAME("FidelityFX-FrameInterpolation"), PassParameters, ERDGPassFlags::Compute | ERDGPassFlags::NeverCull | ERDGPassFlags::Copy, [InterpolateIndex, UpscalerDesc, ConfigDesc, CameraInfoDesc, OutputExtents, OutputPoint, ViewportRHI, Presenter, Context, PassParameters, interpolateParams, DeltaTimeMs, Engine, ViewportOutputFormat, GHDRMinLuminnanceLog10, GHDRMaxLuminnance](FRHICommandListImmediate& RHICmdList)
 		{
 			PassParameters->ColorTexture->MarkResourceAsUsed();
 			PassParameters->InterpolatedRT->MarkResourceAsUsed();
@@ -1332,14 +767,14 @@ bool FFXFrameInterpolation::InterpolateView(FRDGBuilder& GraphBuilder, FFXFrameI
 			auto InterpolatedRes = Presenter->GetBackend()->GetNativeResource(PassParameters->InterpolatedRT.GetTexture(), Presenter->GetMode() == EFFXFrameInterpolationPresentModeNative || !bWholeScreen || InterpolateIndex == 0 ? FFX_API_RESOURCE_STATE_UNORDERED_ACCESS : FFX_API_RESOURCE_STATE_COPY_SRC);
 #endif
 			Presenter->SetCustomPresentStatus(FFXFrameInterpolationCustomPresentStatus::InterpolateRT);
-			RHICmdList.EnqueueLambda([PrepareDesc, ConfigureDesc, ViewportRHI, Presenter, Context, InterpolatedRes, interpolateParams, OutputExtents, OutputPoint, bWholeScreen, ViewportOutputFormat, GHDRMinLuminnanceLog10, GHDRMaxLuminnance](FRHICommandListImmediate& cmd) mutable
+			RHICmdList.EnqueueLambda([PrepareDesc, ConfigureDesc, CameraInfoDesc, ViewportRHI, Presenter, Context, InterpolatedRes, interpolateParams, OutputExtents, OutputPoint, bWholeScreen, ViewportOutputFormat, GHDRMinLuminnanceLog10, GHDRMaxLuminnance](FRHICommandListImmediate& cmd) mutable
 			{
 				if (Context->Distortion.IsValid())
 				{
 					ffxConfigureDescFrameGenerationRegisterDistortionFieldResource DistortionDesc;
 					DistortionDesc.header.pNext = nullptr;
 					DistortionDesc.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION_REGISTERDISTORTIONRESOURCE;
-					DistortionDesc.distortionField = Presenter->GetBackend()->GetNativeResource(Context->Distortion, FFX_API_RESOURCE_STATE_PIXEL_READ);
+					DistortionDesc.distortionField = Presenter->GetBackend()->GetNativeResource(Context->Distortion, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
 					Presenter->GetBackend()->UpdateSwapChain(&Context->Context, ConfigureDesc, DistortionDesc);
 				}
 				else
@@ -1372,6 +807,8 @@ bool FFXFrameInterpolation::InterpolateView(FRDGBuilder& GraphBuilder, FFXFrameI
 					{
 						ffxDispatchDescFrameGenerationPrepare UpscalerDesc = PrepareDesc;
 						UpscalerDesc.commandList = Presenter->GetBackend()->GetNativeCommandBuffer(cmd, Context->MotionVectorRT->GetRHI(GET_RHI_VIEW_ARG));
+
+						UpscalerDesc.header.pNext = &CameraInfoDesc.header;
 
 						auto Code = Presenter->GetBackend()->ffxDispatch(&Context->Context, &UpscalerDesc.header);
 						check(Code == FFX_API_RETURN_OK);
@@ -1694,11 +1131,13 @@ void FFXFrameInterpolation::OnSlateWindowRendered(SWindow& SlateWindow, void* Vi
 				});
 
 				double OldLastTickTime = 0.0;
+				double& SlateLastTickTimeRef = ((FFXSlateApplication&)App).LastTickTimeRef();
+
 				bool const bModifySlateDeltaTime = (CVarFFXFIModifySlateDeltaTime.GetValueOnAnyThread() != 0);
 				if (bModifySlateDeltaTime)
 				{
-					OldLastTickTime = ((FFXFISlateApplication&)App).LastTickTime;
-					((FFXFISlateApplication&)App).LastTickTime = (((FFXFISlateApplication&)App).CurrentTime);
+					OldLastTickTime = SlateLastTickTimeRef;
+					SlateLastTickTimeRef = App.GetCurrentTime();
 				}
 
 				// If we hold on to this and the viewport resizes during redrawing then bad things will happen.
@@ -1708,7 +1147,7 @@ void FFXFrameInterpolation::OnSlateWindowRendered(SWindow& SlateWindow, void* Vi
 				
 				if (bModifySlateDeltaTime)
 				{
-					((FFXFISlateApplication&)App).LastTickTime = OldLastTickTime;
+					SlateLastTickTimeRef = OldLastTickTime;
 				}
 			}
 			bProcessing = false;

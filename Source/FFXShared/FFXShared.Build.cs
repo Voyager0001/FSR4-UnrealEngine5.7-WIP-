@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -31,17 +31,8 @@ public class FFXShared : ModuleRules
 
 		PublicIncludePaths.AddRange(
 			new string[] {
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/include"),
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/ffx-api/include/"),
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/ffx-api/include/ffx_api")
-			}
-			);
-
-
-		PrivateIncludePaths.AddRange(
-			new string[] {
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/src"),
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/src/shared"),
+				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/Kits/FidelityFX/api/include"),
+				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/Kits/FidelityFX/api/internal"),
 			}
 			);
 
@@ -58,7 +49,6 @@ public class FFXShared : ModuleRules
 			new string[]
 			{
 				"Core",
-				"Engine",
 			}
 			);
 

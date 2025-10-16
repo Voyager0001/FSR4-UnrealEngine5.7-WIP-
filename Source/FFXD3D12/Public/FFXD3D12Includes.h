@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -42,16 +42,31 @@
 #if UE_VERSION_NEWER_THAN(5, 2, 1)
 	#include <bit>
 #endif
-	#include "FidelityFX/host/ffx_types.h"
-	#include "FidelityFX/host/ffx_error.h"
+	#include "ffx_internal_types.h"
+	#include "ffx_error.h"
 
 #if !defined(FFX_GCC)
 	#undef FFX_API
 	#define FFX_API __declspec(dllexport)
 #endif
 
+	// TMM_TODO: can we get ffx_api_loader.h to respect PLATFORM_WINDOWS, or if they can add something else that's safer than just #define _WINDOWS and hope everything works out.
+	#if PLATFORM_WINDOWS
+		#ifndef _WINDOWS
+			#define _WINDOWS 1
+			#define FFX_FSR4_D3D12INCLUDES_NEEDS_UNDEF_WINDOWS 1
+		#endif
+	#endif
+
 	#include "ffx_api_loader.h"
+
+	#if FFX_FSR4_D3D12INCLUDES_NEEDS_UNDEF_WINDOWS
+		#undef _WINDOWS
+	#endif
+
 	#include "ffx_api_dx12.h"
+
+	#include "ffx_api_framegeneration_dx12.h"
 
 	FFX_API FfxErrorCode ffxFrameInterpolationUiComposition(const FfxPresentCallbackDescription* params, void*);
 

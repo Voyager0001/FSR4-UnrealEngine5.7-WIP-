@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -27,7 +27,7 @@
 #include "Interfaces/IPluginManager.h"
 #include "RenderGraphResources.h"
 #include "Features/IModularFeatures.h"
-#include "FFXFSR3Settings.h"
+#include "FFXFSR4Settings.h"
 
 #include "FFXFrameInterpolationApi.h"
 #include "FFXD3D12Includes.h"
@@ -114,7 +114,7 @@ IMPLEMENT_MODULE(FFXD3D12BackendModule, FFXD3D12Backend)
 extern ENGINE_API float GAverageFPS;
 extern ENGINE_API float GAverageMS;
 #if FFX_UE_SUPPORTS_SWAPCHAIN_PROVIDER_V1
-TCHAR SwapChainProviderName[] = TEXT("FSR3SwapchainProvider");
+TCHAR SwapChainProviderName[] = TEXT("FSR4SwapchainProvider");
 #endif
 
 //-------------------------------------------------------------------------------------
@@ -243,7 +243,12 @@ public:
 
 	ULONG STDMETHODCALLTYPE AddRef(void) final
 	{
+#if UE_VERSION_AT_LEAST(5, 6, 0)
+		FThreadSafeRefCountedObject::AddRef();
+		return GetRefCount();
+#else
 		return FThreadSafeRefCountedObject::AddRef();
+#endif
 	}
 
 	ULONG STDMETHODCALLTYPE Release(void) final
@@ -431,7 +436,7 @@ class FFXD3D12Backend : public IFFXSharedBackend
 	struct FFXFrameResources
 	{
 		TRefCountPtr<FRHIResource> FIResources;
-		TRefCountPtr<IRefCountedObject> FSR3Resources;
+		TRefCountPtr<IRefCountedObject> FSR4Resources;
 	};
 
 	FFXSharedAllocCallbacks AllocCbs;
@@ -443,7 +448,7 @@ class FFXD3D12Backend : public IFFXSharedBackend
 	static float AverageTime;
 	static float AverageFPS;
 public:
-	static FFXD3D12Backend sFFXD3D12Backend;
+	static FFXD3D12Backend sFFXD3D12Backend[FFXTechnique::Count];
 
 	FFXD3D12Backend()
 	{
@@ -460,17 +465,15 @@ public:
 		}
 	}
 
-	bool LoadDLL()
+	bool LoadDLL(FString Name)
 	{
 		bool bOk = false;
-
-		FString Name = TEXT("amd_fidelityfx_dx12.dll");
 
 #if WITH_EDITOR
 		FModuleStatus ModuleStatus;
 		if (FModuleManager::Get().QueryModule(TEXT("FFXD3D12Backend"), ModuleStatus))
 		{
-			FString Dir = FPaths::Combine(FPaths::GetPath(ModuleStatus.FilePath), TEXT("../../Source/fidelityfx-sdk/PrebuiltSignedDLL"));
+			FString Dir = FPaths::Combine(FPaths::GetPath(ModuleStatus.FilePath), TEXT("../../Source/fidelityfx-sdk/Kits/FidelityFX/signedbin"));
 			FPaths::CollapseRelativeDirectories(Dir);
 			FPlatformProcess::AddDllDirectory(*Dir);
 			Name = FPaths::Combine(Dir, Name);
@@ -493,7 +496,13 @@ public:
 		Dx12Header.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
 		Dx12Header.header.pNext = nullptr;
 		Dx12Header.device = (ID3D12Device*)GDynamicRHI->RHIGetNativeDevice();
-		desc->pNext = (ffxApiHeader*)&Dx12Header;
+
+		ffxApiHeader* lastHeader = desc;
+		while (lastHeader->pNext)
+		{
+			lastHeader = lastHeader->pNext;
+		}
+		lastHeader->pNext = (ffxApiHeader*)&Dx12Header;
 
 		return FfxFunctions.CreateContext(context, desc, &AllocCbs.Cbs);
 	}
@@ -622,25 +631,25 @@ public:
 		return bIsSupported;
 	}
 
-	static D3D12_RESOURCE_STATES GetDX12StateFromResourceState(FfxResourceStates state)
+	static D3D12_RESOURCE_STATES GetDX12StateFromResourceState(FfxApiResourceState state)
 	{
 		switch (state) {
 
-			case(FFX_RESOURCE_STATE_GENERIC_READ):
+			case(FFX_API_RESOURCE_STATE_GENERIC_READ):
 				return D3D12_RESOURCE_STATE_GENERIC_READ;
-			case(FFX_RESOURCE_STATE_UNORDERED_ACCESS):
+			case(FFX_API_RESOURCE_STATE_UNORDERED_ACCESS):
 				return D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-			case (FFX_RESOURCE_STATE_PIXEL_COMPUTE_READ):
+			case (FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ):
 				return D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-			case(FFX_RESOURCE_STATE_COMPUTE_READ):
+			case(FFX_API_RESOURCE_STATE_COMPUTE_READ):
 				return D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-			case (FFX_RESOURCE_STATE_PIXEL_READ):
+			case (FFX_API_RESOURCE_STATE_PIXEL_READ):
 				return D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-			case FFX_RESOURCE_STATE_COPY_SRC:
+			case FFX_API_RESOURCE_STATE_COPY_SRC:
 				return D3D12_RESOURCE_STATE_COPY_SOURCE;
-			case FFX_RESOURCE_STATE_COPY_DEST:
+			case FFX_API_RESOURCE_STATE_COPY_DEST:
 				return D3D12_RESOURCE_STATE_COPY_DEST;
-			case FFX_RESOURCE_STATE_INDIRECT_ARGUMENT:
+			case FFX_API_RESOURCE_STATE_INDIRECT_ARGUMENT:
 				return D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
 			default:
 				return D3D12_RESOURCE_STATE_COMMON;
@@ -653,23 +662,14 @@ public:
 		RHICmdList.Transition(Info);
 	}
 
-	static FfxResource FFXConvertResource(FfxApiResource ApiResource)
-	{
-		FfxResource Resource;
-		FMemory::Memzero(Resource);
-
-		Resource.resource = ApiResource.resource;
-		Resource.state = (FfxResourceStates)ApiResource.state;
-		memcpy(&Resource.description, &ApiResource.description, sizeof(FfxResourceDescription));
-
-		return Resource;
-	}
-
 	static ffxReturnCode_t FFXFrameInterpolationUiCompositionCallback(ffxCallbackDescFrameGenerationPresent* params, void* unusedUserCtx)
 	{
 		if (!params->isGeneratedFrame)
 		{
-			sFFXD3D12Backend.ReleaseFrameResources(params->frameID);
+			for (int i = 0; i < FFXTechnique::Count; i++)
+			{
+				sFFXD3D12Backend[i].ReleaseFrameResources(params->frameID);
+			}
 		}
 
 		FfxPresentCallbackDescription PresentParams;
@@ -678,9 +678,9 @@ public:
 		PresentParams.isInterpolatedFrame = params->isGeneratedFrame;
 		PresentParams.frameID = params->frameID;
 		PresentParams.usePremulAlpha = false;
-		PresentParams.currentBackBuffer = FFXConvertResource(params->currentBackBuffer);
-		PresentParams.currentUI = FFXConvertResource(params->currentUI);
-		PresentParams.outputSwapChainBuffer = FFXConvertResource(params->outputSwapChainBuffer);
+		PresentParams.currentBackBuffer = params->currentBackBuffer;
+		PresentParams.currentUI = params->currentUI;
+		PresentParams.outputSwapChainBuffer = params->outputSwapChainBuffer;
 
 		ffxFrameInterpolationUiComposition(&PresentParams, unusedUserCtx);
 
@@ -803,12 +803,12 @@ public:
 		D3D12_RESOURCE_BARRIER barriers[2] = {};
 		barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 		barriers[0].Transition.pResource = SrcRes;
-		barriers[0].Transition.StateBefore = GetDX12StateFromResourceState((FfxResourceStates)Src.state);
+		barriers[0].Transition.StateBefore = GetDX12StateFromResourceState((FfxApiResourceState)Src.state);
 		barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
 
 		barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 		barriers[1].Transition.pResource = DstRes;
-		barriers[1].Transition.StateBefore = GetDX12StateFromResourceState((FfxResourceStates)Dst.state);
+		barriers[1].Transition.StateBefore = GetDX12StateFromResourceState((FfxApiResourceState)Dst.state);
 		barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
 		pCmdList->ResourceBarrier(_countof(barriers), barriers);
 
@@ -844,7 +844,7 @@ public:
 double FFXD3D12Backend::LastTime = FPlatformTime::Seconds();
 float FFXD3D12Backend::AverageTime = 0.f;
 float FFXD3D12Backend::AverageFPS = 0.f;
-FFXD3D12Backend FFXD3D12Backend::sFFXD3D12Backend;
+FFXD3D12Backend FFXD3D12Backend::sFFXD3D12Backend[FFXTechnique::Count];
 
 //-------------------------------------------------------------------------------------
 // Factory/provider implementation used to create & insert the proxy swapchain.
@@ -864,7 +864,7 @@ public:
 	: Inner(nullptr)
 	, Inner2(nullptr)
 	, FFXFrameInterpolation(InFFXFrameInterpolation)
-	, Backend(FFXD3D12Backend::sFFXD3D12Backend)
+	, Backend(FFXD3D12Backend::sFFXD3D12Backend[FFXTechnique::FrameGeneration])
 	{
 #if FFX_UE_SUPPORTS_SWAPCHAIN_PROVIDER_V1
 		IModularFeatures::Get().RegisterModularFeature("DXGISwapchainProvider", this);
@@ -965,7 +965,7 @@ public:
 		FFXD3D12SwapChain* D3D12SwapChain = nullptr;
 		IDXGISwapChain* RawSwapChain = nullptr;
 		FfxInterface* Interface = nullptr;
-		bool bOverrideSwapChain = ((CVarFSR3OverrideSwapChainDX12.GetValueOnAnyThread() != 0) || FParse::Param(FCommandLine::Get(), TEXT("fsr3swapchain")));
+		bool bOverrideSwapChain = ((CVarFSR4OverrideSwapChainDX12.GetValueOnAnyThread() != 0) || FParse::Param(FCommandLine::Get(), TEXT("fsr4swapchain")));
 
 		// Don't override the swapchain in the Editor - it causes too many issues
 #if WITH_EDITORONLY_DATA
@@ -995,17 +995,18 @@ public:
 			auto ReturnCode = Backend.ffxCreateContext(&SwapChain, (ffxCreateContextDescHeader*)&SwapChainDesc);
 			if (ReturnCode == FFX_API_RETURN_OK)
 			{
+				RawSwapChain->Release();
 				D3D12SwapChain = new FFXD3D12SwapChain(&Backend, SwapChain, (IDXGISwapChain4*)RawSwapChain);
 				D3D12SwapChain->AddRef();
 				Result = S_OK;
 
-				if (FParse::Param(FCommandLine::Get(), TEXT("fsr3hudless")))
+				if (FParse::Param(FCommandLine::Get(), TEXT("fsr4hudless")))
 				{
 					CVarFFXFIUIMode->Set(1);
 				}
-				if (FParse::Param(FCommandLine::Get(), TEXT("fsr3async")))
+				if (FParse::Param(FCommandLine::Get(), TEXT("fsr4async")))
 				{
-					CVarFSR3AllowAsyncWorkloads->Set(1);
+					CVarFSR4AllowAsyncWorkloads->Set(1);
 				}
 			}
 			else
@@ -1030,7 +1031,7 @@ public:
 				*ppSwapChain = (IDXGISwapChain1*)(D3D12SwapChain ? D3D12SwapChain : RawSwapChain);
 				if (bOverrideSwapChain)
 				{
-					bool bAllowAsyncWorkloads = (CVarFSR3AllowAsyncWorkloads.GetValueOnAnyThread() != 0);
+					bool bAllowAsyncWorkloads = (CVarFSR4AllowAsyncWorkloads.GetValueOnAnyThread() != 0);
 					bool bUIMode = (CVarFFXFIUIMode.GetValueOnAnyThread() != 0);
 					if (bAllowAsyncWorkloads || bUIMode)
 					{
@@ -1189,7 +1190,7 @@ public:
 		FFXD3D12SwapChain* D3D12SwapChain = nullptr;
 		IDXGISwapChain* RawSwapChain = nullptr;
 		FfxInterface* Interface = nullptr;
-		bool bOverrideSwapChain = ((CVarFSR3OverrideSwapChainDX12.GetValueOnAnyThread() != 0) || FParse::Param(FCommandLine::Get(), TEXT("fsr3swapchain")));
+		bool bOverrideSwapChain = ((CVarFSR4OverrideSwapChainDX12.GetValueOnAnyThread() != 0) || FParse::Param(FCommandLine::Get(), TEXT("fsr4swapchain")));
 
 		// Don't override the swapchain in the Editor - it causes too many issues
 #if WITH_EDITORONLY_DATA
@@ -1214,17 +1215,18 @@ public:
 			auto ReturnCode = Backend.ffxCreateContext(&SwapChain, (ffxCreateContextDescHeader*)&SwapChainDesc);
 			if (ReturnCode == FFX_API_RETURN_OK)
 			{
+				RawSwapChain->Release();
 				D3D12SwapChain = new FFXD3D12SwapChain(&Backend, SwapChain, (IDXGISwapChain4*)RawSwapChain);
 				D3D12SwapChain->AddRef();
 				Result = S_OK;
 
-				if (FParse::Param(FCommandLine::Get(), TEXT("fsr3hudless")))
+				if (FParse::Param(FCommandLine::Get(), TEXT("fsr4hudless")))
 				{
 					CVarFFXFIUIMode->Set(1);
 				}
-				if (FParse::Param(FCommandLine::Get(), TEXT("fsr3async")))
+				if (FParse::Param(FCommandLine::Get(), TEXT("fsr4async")))
 				{
-					CVarFSR3AllowAsyncWorkloads->Set(1);
+					CVarFSR4AllowAsyncWorkloads->Set(1);
 				}
 			}
 			else
@@ -1249,7 +1251,7 @@ public:
 				*ppSwapChain = D3D12SwapChain ? D3D12SwapChain : RawSwapChain;
 				if (bOverrideSwapChain)
 				{
-					bool bAllowAsyncWorkloads = (CVarFSR3AllowAsyncWorkloads.GetValueOnAnyThread() != 0);
+					bool bAllowAsyncWorkloads = (CVarFSR4AllowAsyncWorkloads.GetValueOnAnyThread() != 0);
 					bool bUIMode = (CVarFFXFIUIMode.GetValueOnAnyThread() != 0);
 					if (bAllowAsyncWorkloads || bUIMode)
 					{
@@ -1326,7 +1328,12 @@ public:
 
 	ULONG STDMETHODCALLTYPE AddRef(void) final
 	{
+#if UE_VERSION_AT_LEAST(5, 6, 0)
+		FThreadSafeRefCountedObject::AddRef();
+		return GetRefCount();
+#else
 		return FThreadSafeRefCountedObject::AddRef();
+#endif
 	}
 
 	ULONG STDMETHODCALLTYPE Release(void) final
@@ -1334,7 +1341,7 @@ public:
 		return FThreadSafeRefCountedObject::Release();
 	}
 };
-static TRefCountPtr<FFXD3D12BackendDXGIFactory2Wrapper> GFFXFSR3DXGISwapChainFactory;
+static TRefCountPtr<FFXD3D12BackendDXGIFactory2Wrapper> GFFXFSR4DXGISwapChainFactory;
 
 //-------------------------------------------------------------------------------------
 // Accessor for the FD3D12Adapter on <= 5.1 so we can replace the DXGI factory to insert the proxy swapchain.
@@ -1345,101 +1352,107 @@ class FFXD3D12BackendAdapter : public FD3D12Adapter
 public:
 	inline void WrapDXGIFactory()
 	{
-		GFFXFSR3DXGISwapChainFactory->Init(DxgiFactory2.GetReference());
+		GFFXFSR4DXGISwapChainFactory->Init(DxgiFactory2.GetReference());
 		DxgiFactory2.SafeRelease();
-		DxgiFactory2 = GFFXFSR3DXGISwapChainFactory;
+		DxgiFactory2 = GFFXFSR4DXGISwapChainFactory;
 	}
 };
 #endif
+
+static bool LoadDLLs()
+{
+	static const FString kDLLNames[FFXTechnique::Count] = 
+	{
+		TEXT("amd_fidelityfx_upscaler_dx12.dll"),
+		TEXT("amd_fidelityfx_framegeneration_dx12.dll"),
+	};
+
+	for (int i = 0; i < FFXTechnique::Count; i++)
+	{
+		if (!FFXD3D12Backend::sFFXD3D12Backend[i].LoadDLL(kDLLNames[i]))
+		{
+			UE_LOG(LogFFXD3D12, Fatal, TEXT("FSR4 D3D12 Module Could Not Load %s"), *kDLLNames[i]);
+			return false;
+		}
+	}
+
+	return true;
+}
 
 //-------------------------------------------------------------------------------------
 // Implementation for FFXD3D12BackendModule.
 //-------------------------------------------------------------------------------------
 void FFXD3D12BackendModule::StartupModule()
 {
-	if (!FParse::Param(FCommandLine::Get(), TEXT("fsr3rhi")) && (CVarFSR3UseNativeDX12.GetValueOnAnyThread() != 0 || FParse::Param(FCommandLine::Get(), TEXT("fsr3native"))))
+	if (LoadDLLs())
 	{
-		if (FFXD3D12Backend::sFFXD3D12Backend.LoadDLL())
-		{
+		IFFXFrameInterpolationModule* FFXFrameInterpolationModule = FModuleManager::GetModulePtr<IFFXFrameInterpolationModule>(TEXT("FFXFrameInterpolation"));
+		bool bOverrideSwapChain = FFXFrameInterpolationModule != nullptr;
 
-			IFFXFrameInterpolationModule* FFXFrameInterpolationModule = FModuleManager::GetModulePtr<IFFXFrameInterpolationModule>(TEXT("FFXFrameInterpolation"));
-			bool bOverrideSwapChain = FFXFrameInterpolationModule != nullptr;
-
-			// Don't override the swapchain in the Editor - it causes too many issues
+		// Don't override the swapchain in the Editor - it causes too many issues
 #if WITH_EDITORONLY_DATA
-			bOverrideSwapChain &= !GIsEditor;
+		bOverrideSwapChain &= !GIsEditor;
 #endif
-			if (bOverrideSwapChain)
-			{
-				IFFXFrameInterpolation* FFXFrameInterpolation = FFXFrameInterpolationModule->GetImpl();
-				check(FFXFrameInterpolation);
+		if (bOverrideSwapChain)
+		{
+			IFFXFrameInterpolation* FFXFrameInterpolation = FFXFrameInterpolationModule->GetImpl();
+			check(FFXFrameInterpolation);
 
-				GFFXFSR3DXGISwapChainFactory = new FFXD3D12BackendDXGIFactory2Wrapper(FFXFrameInterpolation);
+			GFFXFSR4DXGISwapChainFactory = new FFXD3D12BackendDXGIFactory2Wrapper(FFXFrameInterpolation);
 
 #if !FFX_UE_SUPPORTS_SWAPCHAIN_PROVIDER_V1
 #if UE_VERSION_AT_LEAST(5, 1, 0)
-				auto& Adapter = ((FD3D12DynamicRHI*)GetID3D12DynamicRHI())->GetAdapter();
+			auto& Adapter = ((FD3D12DynamicRHI*)GetID3D12DynamicRHI())->GetAdapter();
 #else
-				static const auto CVarHDRMinLuminanceLog10 = IConsoleManager::Get().FindConsoleVariable(TEXT("r.HDR.Display.MinLuminanceLog10"));
-				static const auto CVarHDRMaxLuminance = IConsoleManager::Get().FindConsoleVariable(TEXT("r.HDR.Display.MaxLuminance"));
+			static const auto CVarHDRMinLuminanceLog10 = IConsoleManager::Get().FindConsoleVariable(TEXT("r.HDR.Display.MinLuminanceLog10"));
+			static const auto CVarHDRMaxLuminance = IConsoleManager::Get().FindConsoleVariable(TEXT("r.HDR.Display.MaxLuminance"));
 
-				auto& Adapter = ((FD3D12DynamicRHI*)GDynamicRHI)->GetAdapter();
+			auto& Adapter = ((FD3D12DynamicRHI*)GDynamicRHI)->GetAdapter();
 
-				IDXGIAdapter* DXGIAdapter = Adapter.GetAdapter();
+			IDXGIAdapter* DXGIAdapter = Adapter.GetAdapter();
 
-				for (uint32 DisplayIndex = 0; true; ++DisplayIndex)
+			for (uint32 DisplayIndex = 0; true; ++DisplayIndex)
+			{
+				TRefCountPtr<IDXGIOutput> DXGIOutput;
+				if (S_OK != DXGIAdapter->EnumOutputs(DisplayIndex, DXGIOutput.GetInitReference()))
 				{
-					TRefCountPtr<IDXGIOutput> DXGIOutput;
-					if (S_OK != DXGIAdapter->EnumOutputs(DisplayIndex, DXGIOutput.GetInitReference()))
-					{
-						break;
-					}
+					break;
+				}
 
-					TRefCountPtr<IDXGIOutput6> Output6;
-					if (SUCCEEDED(DXGIOutput->QueryInterface(IID_PPV_ARGS(Output6.GetInitReference()))))
+				TRefCountPtr<IDXGIOutput6> Output6;
+				if (SUCCEEDED(DXGIOutput->QueryInterface(IID_PPV_ARGS(Output6.GetInitReference()))))
+				{
+					DXGI_OUTPUT_DESC1 OutputDesc;
+					if (Output6->GetDesc1(&OutputDesc) == S_OK)
 					{
-						DXGI_OUTPUT_DESC1 OutputDesc;
-						if (Output6->GetDesc1(&OutputDesc) == S_OK)
+						// Check for HDR support on the display.
+						const bool bDisplaySupportsHDROutput = (OutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+						if (bDisplaySupportsHDROutput)
 						{
-							// Check for HDR support on the display.
-							const bool bDisplaySupportsHDROutput = (OutputDesc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
-							if (bDisplaySupportsHDROutput)
-							{
-								CVarHDRMaxLuminance->Set(OutputDesc.MaxLuminance, ECVF_SetByConstructor);
-								CVarHDRMinLuminanceLog10->Set(static_cast<float>(log10(OutputDesc.MinLuminance)), ECVF_SetByConstructor);
-								break;
-							}
+							CVarHDRMaxLuminance->Set(OutputDesc.MaxLuminance, ECVF_SetByConstructor);
+							CVarHDRMinLuminanceLog10->Set(static_cast<float>(log10(OutputDesc.MinLuminance)), ECVF_SetByConstructor);
+							break;
 						}
 					}
 				}
+			}
 
 #endif
-				FFXD3D12BackendAdapter* Wrapper = (FFXD3D12BackendAdapter*)&Adapter;
-				Wrapper->WrapDXGIFactory();
+			FFXD3D12BackendAdapter* Wrapper = (FFXD3D12BackendAdapter*)&Adapter;
+			Wrapper->WrapDXGIFactory();
 #endif
-			}
-		}
-		else if (FParse::Param(FCommandLine::Get(), TEXT("fsr3native")))
-		{
-			UE_LOG(LogFFXD3D12, Fatal, TEXT("FSR3 D3D12 Module Could Not Load amd_fidelityfx_dx12.dll when forcing its use with -fsr3native"));
-		}
-		else
-		{
-			CVarFSR3UseNativeDX12->Set(0, ECVF_SetByCode);
-			CVarFSR3UseRHI->Set(1, ECVF_SetByCode);
-			UE_LOG(LogFFXD3D12, Error, TEXT("FSR3 D3D12 Module Could Not Load amd_fidelityfx_dx12.dll - falling back to RHI implementation"));
 		}
 	}
 }
 
 void FFXD3D12BackendModule::ShutdownModule()
 {
-	GFFXFSR3DXGISwapChainFactory.SafeRelease();
+	GFFXFSR4DXGISwapChainFactory.SafeRelease();
 }
 
-IFFXSharedBackend* FFXD3D12BackendModule::GetBackend()
+IFFXSharedBackend* FFXD3D12BackendModule::GetBackend(FFXTechnique technique)
 {
-	return &FFXD3D12Backend::sFFXD3D12Backend;
+	return &FFXD3D12Backend::sFFXD3D12Backend[technique];
 }
 
 #undef LOCTEXT_NAMESPACE

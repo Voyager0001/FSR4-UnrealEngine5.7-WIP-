@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -38,16 +38,16 @@
 #if UE_VERSION_NEWER_THAN(5, 2, 1)
 	#include <bit>
 #endif
-	#include "FidelityFX/host/ffx_types.h"
+	#include "ffx_internal_types.h"
 
 #if !defined(FFX_GCC)
 	#undef FFX_API
 	#define FFX_API __declspec(dllexport)
 #endif
 
-	#include "FidelityFX/host/ffx_frameinterpolation.h"
+	#include "ffx_frameinterpolation.h"
 
-	#include "FidelityFX/gpu/frameinterpolation/ffx_frameinterpolation_resources.h"
+	#include "gpu/frameinterpolation/ffx_frameinterpolation_resources.h"
 
 	#include "ffx_framegeneration.h"
 

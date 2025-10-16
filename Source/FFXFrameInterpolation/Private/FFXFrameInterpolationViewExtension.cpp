@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -23,7 +23,7 @@
 #include "FFXFrameInterpolation.h"
 #include "PostProcess/PostProcessing.h"
 #include "ScenePrivate.h"
-#include "../../FFXFSR3TemporalUpscaling/Public/FFXFSR3History.h"
+#include "../../FFXFSR4TemporalUpscaling/Public/FFXFSR4History.h"
 
 namespace FFXFIStrings
 {

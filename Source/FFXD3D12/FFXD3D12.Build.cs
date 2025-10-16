@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -31,18 +31,23 @@ public class FFXD3D12 : ModuleRules
 
 		PublicIncludePaths.AddRange(
 			new string[] {
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/include"),
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/ffx-api/include/ffx_api/dx12")
+				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/Kits/FidelityFX/api/include"),
+				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/Kits/FidelityFX/api/include/dx12"),
+				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/Kits/FidelityFX/api/internal"),
+				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/Kits/FidelityFX/framegeneration/include/dx12"),
+				//Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/include"),
+				//Path.Combine(ModuleDirectory, "../fidelityfx-sdk/ffx-api/include/ffx_api/dx12")
 			}
 			);
 
 		PrivateIncludePaths.AddRange(
 			new string[] {
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/src"),
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/src/shared"),
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/src/components"),
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/src/backends/shared"),
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/libs")
+				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/Kits/FidelityFX/framegeneration/fsr3/dx12"),
+				//Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/src"),
+				//Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/src/shared"),
+				//Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/src/components"),
+				//Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/src/backends/shared"),
+				//Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/libs")
 			}
 			);
 
@@ -71,9 +76,11 @@ public class FFXD3D12 : ModuleRules
 
 		// New FfxApi DLL for DX12
 		{
-			string AmdApiLibPath = Path.Combine(ModuleDirectory, "../fidelityfx-sdk/PrebuiltSignedDLL");
-			RuntimeDependencies.Add("$(TargetOutputDir)/amd_fidelityfx_dx12.dll", Path.Combine(AmdApiLibPath, "amd_fidelityfx_dx12.dll"));
-			PublicDelayLoadDLLs.Add("amd_fidelityfx_dx12.dll");
+			string AmdApiLibPath = Path.Combine(ModuleDirectory, "../fidelityfx-sdk/Kits/FidelityFX/signedbin");
+			RuntimeDependencies.Add("$(TargetOutputDir)/amd_fidelityfx_upscaler_dx12.dll", Path.Combine(AmdApiLibPath, "amd_fidelityfx_upscaler_dx12.dll"));
+			RuntimeDependencies.Add("$(TargetOutputDir)/amd_fidelityfx_framegeneration_dx12.dll", Path.Combine(AmdApiLibPath, "amd_fidelityfx_framegeneration_dx12.dll"));
+			PublicDelayLoadDLLs.Add("amd_fidelityfx_upscaler_dx12.dll");
+			PublicDelayLoadDLLs.Add("amd_fidelityfx_framegeneration_dx12.dll");
 		}
 
 		PrecompileForTargets = PrecompileTargetsType.Any;

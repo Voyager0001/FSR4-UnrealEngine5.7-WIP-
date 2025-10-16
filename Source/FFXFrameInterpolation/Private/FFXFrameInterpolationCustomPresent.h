@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -150,7 +150,7 @@ public:
 	// @return	true if native Present should be also be performed; false otherwise. If it returns
 	// true, then InOutSyncInterval could be modified to switch between VSync/NoVSync for the normal 
 	// Present.  Must match value previously returned by NeedsNativePresent for this frame.
-	bool Present(int32& InOutSyncInterval) override final;
+	bool Present(int32& InOutSyncInterval); //override final;
 
 	// Called from RHI thread after native Present has been called
 	void PostPresent() override final;

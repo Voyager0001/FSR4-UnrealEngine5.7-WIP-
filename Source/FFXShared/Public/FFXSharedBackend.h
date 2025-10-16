@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -51,7 +51,6 @@ namespace FFXStrings
 enum class EFFXBackendAPI : uint8
 {
 	D3D12,
-	Unreal,
 	Unsupported,
 	Unknown
 };
@@ -119,10 +118,18 @@ private:
 };
 
 extern FFXSHARED_API FfxApiSurfaceFormat GetFFXApiFormat(EPixelFormat UEFormat, bool bSRGB);
-extern FFXSHARED_API ERHIAccess GetUEAccessState(FfxResourceStates State);
+extern FFXSHARED_API ERHIAccess GetUEAccessState(FfxApiResourceState State);
+
+enum FFXTechnique
+{
+	Upscaler = 0,
+	FrameGeneration,
+
+	Count
+};
 
 class IFFXSharedBackendModule : public IModuleInterface
 {
 public:
-	virtual IFFXSharedBackend* GetBackend() = 0;
+	virtual IFFXSharedBackend* GetBackend(FFXTechnique technique) = 0;
 };

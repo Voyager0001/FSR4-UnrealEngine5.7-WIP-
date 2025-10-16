@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -32,7 +32,8 @@
 #endif
 THIRD_PARTY_INCLUDES_START
 
-#include "components/opticalflow/ffx_opticalflow.cpp"
+//#include "ffx_opticalflow_shaderblobs.cpp"
+//#include "ffx_opticalflow.cpp"
 
 THIRD_PARTY_INCLUDES_END
 #if PLATFORM_WINDOWS

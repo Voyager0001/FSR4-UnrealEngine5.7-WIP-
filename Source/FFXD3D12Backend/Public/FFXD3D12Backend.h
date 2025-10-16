@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -35,5 +35,5 @@ public:
 	void StartupModule() override;
 	void ShutdownModule() override;
 
-	IFFXSharedBackend* GetBackend() final;
+	IFFXSharedBackend* GetBackend(FFXTechnique technique) final;
 };

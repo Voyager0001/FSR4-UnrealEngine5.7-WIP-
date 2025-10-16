@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -39,7 +39,7 @@ public class FFXD3D12Backend : ModuleRules
 				"RHI",
 				"FFXFrameInterpolationApi",
 				"FFXD3D12",
-				"FFXFSR3Settings"
+				"FFXFSR4Settings"
 			}
 		);
 		
@@ -70,7 +70,10 @@ public class FFXD3D12Backend : ModuleRules
 
 			// Required for some private headers needed for the rendering support.
 			var EngineDir = Path.GetFullPath(Target.RelativeEnginePath);
-			PrivateIncludePaths.AddRange(
+            PublicIncludePaths.Add(Path.Combine(EngineDir, @"Source\Runtime\D3D12RHI\Private"));
+            PublicIncludePaths.Add(Path.Combine(EngineDir, @"Source\Runtime\D3D12RHI\Internal"));
+            PublicIncludePaths.Add(Path.Combine(EngineDir, @"Source\Runtime\RHICore\Internal"));
+            PrivateIncludePaths.AddRange(
 				new string[] {
 					Path.Combine(EngineDir, @"Source\Runtime\D3D12RHI\Private")
 			});

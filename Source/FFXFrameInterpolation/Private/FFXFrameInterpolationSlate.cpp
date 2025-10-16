@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -57,6 +57,12 @@ struct FFISlateReleaseDrawBufferCommand final : public FRHICommand < FFISlateRel
 	}
 };
 
+FDelegateHandle OnSlateWindowRenderedHandle;
+FDelegateHandle OnSlateWindowDestroyedHandle;
+FDelegateHandle OnPreResizeWindowBackBufferHandle;
+FDelegateHandle OnPostResizeWindowBackBufferHandle;
+FDelegateHandle OnBackBufferReadyToPresentHandle;
+
 //------------------------------------------------------------------------------------------------------
 // Implementation for the SlateRenderer override that allows for more draw buffers.
 //------------------------------------------------------------------------------------------------------
@@ -66,15 +72,40 @@ FFXFrameInterpolationSlateRenderer::FFXFrameInterpolationSlateRenderer(TSharedRe
 , FreeBufferIndex(0)
 , ResourceVersion(0)
 {
-    InUnderlyingRenderer->OnSlateWindowRendered().AddRaw(this, &FFXFrameInterpolationSlateRenderer::OnSlateWindowRenderedThunk);
-    InUnderlyingRenderer->OnSlateWindowDestroyed().AddRaw(this, &FFXFrameInterpolationSlateRenderer::OnSlateWindowDestroyedThunk);
-    InUnderlyingRenderer->OnPreResizeWindowBackBuffer().AddRaw(this, &FFXFrameInterpolationSlateRenderer::OnPreResizeWindowBackBufferThunk);
-    InUnderlyingRenderer->OnPostResizeWindowBackBuffer().AddRaw(this, &FFXFrameInterpolationSlateRenderer::OnPostResizeWindowBackBufferThunk);
-    InUnderlyingRenderer->OnBackBufferReadyToPresent().AddRaw(this, &FFXFrameInterpolationSlateRenderer::OnBackBufferReadyToPresentThunk);
+	SlateWindowRendered = MoveTemp(InUnderlyingRenderer->OnSlateWindowRendered());
+	OnSlateWindowDestroyedDelegate = MoveTemp(InUnderlyingRenderer->OnSlateWindowDestroyed());
+	PreResizeBackBufferDelegate = MoveTemp(InUnderlyingRenderer->OnPreResizeWindowBackBuffer());
+	PostResizeBackBufferDelegate = MoveTemp(InUnderlyingRenderer->OnPostResizeWindowBackBuffer());
+	OnBackBufferReadyToPresentDelegate = MoveTemp(InUnderlyingRenderer->OnBackBufferReadyToPresent());
+	
+	InUnderlyingRenderer->OnSlateWindowRendered().Clear();
+	InUnderlyingRenderer->OnSlateWindowDestroyed().Clear();
+	InUnderlyingRenderer->OnPreResizeWindowBackBuffer().Clear();
+	InUnderlyingRenderer->OnPostResizeWindowBackBuffer().Clear();
+	InUnderlyingRenderer->OnBackBufferReadyToPresent().Clear();
+	
+	OnSlateWindowRenderedHandle = InUnderlyingRenderer->OnSlateWindowRendered().AddRaw(this, &FFXFrameInterpolationSlateRenderer::OnSlateWindowRenderedThunk);
+	OnSlateWindowDestroyedHandle = InUnderlyingRenderer->OnSlateWindowDestroyed().AddRaw(this, &FFXFrameInterpolationSlateRenderer::OnSlateWindowDestroyedThunk);
+	OnPreResizeWindowBackBufferHandle = InUnderlyingRenderer->OnPreResizeWindowBackBuffer().AddRaw(this, &FFXFrameInterpolationSlateRenderer::OnPreResizeWindowBackBufferThunk);
+	OnPostResizeWindowBackBufferHandle = InUnderlyingRenderer->OnPostResizeWindowBackBuffer().AddRaw(this, &FFXFrameInterpolationSlateRenderer::OnPostResizeWindowBackBufferThunk);
+	OnBackBufferReadyToPresentHandle = InUnderlyingRenderer->OnBackBufferReadyToPresent().AddRaw(this, &FFXFrameInterpolationSlateRenderer::OnBackBufferReadyToPresentThunk);
+	
+	FSlateApplication::Get().OnPreShutdown().AddLambda([InUnderlyingRenderer]()
+	{
+		InUnderlyingRenderer->OnSlateWindowRendered().Remove(OnSlateWindowRenderedHandle);
+		InUnderlyingRenderer->OnSlateWindowDestroyed().Remove(OnSlateWindowDestroyedHandle);
+		InUnderlyingRenderer->OnPreResizeWindowBackBuffer().Remove(OnPreResizeWindowBackBufferHandle);
+		InUnderlyingRenderer->OnPostResizeWindowBackBuffer().Remove(OnPostResizeWindowBackBufferHandle);
+		InUnderlyingRenderer->OnBackBufferReadyToPresent().Remove(OnBackBufferReadyToPresentHandle);
+	});
 }
 FFXFrameInterpolationSlateRenderer::~FFXFrameInterpolationSlateRenderer()
 {
-
+	UnderlyingRenderer->OnSlateWindowRendered().Remove(OnSlateWindowRenderedHandle);
+	UnderlyingRenderer->OnSlateWindowDestroyed().Remove(OnSlateWindowDestroyedHandle);
+	UnderlyingRenderer->OnPreResizeWindowBackBuffer().Remove(OnPreResizeWindowBackBufferHandle);
+	UnderlyingRenderer->OnPostResizeWindowBackBuffer().Remove(OnPostResizeWindowBackBufferHandle);
+	UnderlyingRenderer->OnBackBufferReadyToPresent().Remove(OnBackBufferReadyToPresentHandle);
 }
 
 #if UE_VERSION_AT_LEAST(5, 1, 0)

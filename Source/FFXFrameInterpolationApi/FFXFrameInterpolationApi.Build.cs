@@ -1,4 +1,4 @@
-// This file is part of the FidelityFX Super Resolution 3.1 Unreal Engine Plugin.
+// This file is part of the FidelityFX Super Resolution 4.0 Unreal Engine Plugin.
 //
 // Copyright (c) 2023-2025 Advanced Micro Devices, Inc. All rights reserved.
 //
@@ -31,17 +31,13 @@ public class FFXFrameInterpolationApi : ModuleRules
 
 		PublicIncludePaths.AddRange(
 			new string[] {
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/include"),
+				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/Kits/FidelityFX/api/internal"),
+				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/Kits/FidelityFX/framegeneration/fsr3/include"),
+				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/Kits/FidelityFX/framegeneration/fsr3/internal"),
+				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/Kits/FidelityFX/framegeneration/include"),
 			}
 			);
 
-
-		PrivateIncludePaths.AddRange(
-			new string[] {
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/src"),
-				Path.Combine(ModuleDirectory, "../fidelityfx-sdk/sdk/src/shared"),
-			}
-			);
 
 		PublicDependencyModuleNames.AddRange(
 			new string[]
@@ -57,7 +53,6 @@ public class FFXFrameInterpolationApi : ModuleRules
 			new string[]
 			{
 				"Core",
-				"Engine",
 			}
 			);
 
